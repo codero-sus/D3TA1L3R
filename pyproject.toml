@@ -1,0 +1,71 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "d3ta1l3r"
+version = "0.1.0"
+description = "Self-audit OSINT toolkit: automated discovery of your own public footprint across public sites and unauthenticated APIs."
+readme = "README.md"
+requires-python = ">=3.10"
+authors = [{ name = "D3TA1L3R contributors" }]
+keywords = ["osint", "self-audit", "privacy", "digital-footprint", "reconnaissance"]
+classifiers = [
+  "Development Status :: 4 - Beta",
+  "Environment :: Console",
+  "Intended Audience :: Information Technology",
+  "Operating System :: OS Independent",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.10",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Topic :: Security",
+]
+dependencies = [
+  "httpx>=0.27,<1.0",
+]
+
+[project.optional-dependencies]
+web = [
+  "fastapi>=0.110",
+  "uvicorn[standard]>=0.29",
+  "jinja2>=3.1",
+]
+dev = [
+  "pytest>=8.0",
+  "pytest-asyncio>=0.23",
+]
+all = [
+  "fastapi>=0.110",
+  "uvicorn[standard]>=0.29",
+  "jinja2>=3.1",
+  "pytest>=8.0",
+  "pytest-asyncio>=0.23",
+]
+
+[project.scripts]
+d3ta1l3r = "d3ta1l3r.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["d3ta1l3r*"]
+namespaces = false
+
+[tool.setuptools.package-data]
+d3ta1l3r = ["data/*.json", "web/templates/*.html", "web/static/*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+addopts = "-q --strict-markers -m 'not network'"
+markers = [
+  "network: test performs real outbound network calls (deselected by default)",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP", "B", "C4", "SIM", "RUF"]
+ignore = ["E501"]

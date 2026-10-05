@@ -1,0 +1,601 @@
+{
+  "schema": "d3ta1l3r/sites/1",
+  "description": "Signature database for public profile-page probes. Data, not code: edit this file to add or fix a site, then run `d3ta1l3r calibrate --sites <id>` before trusting it.",
+  "provenance": {
+    "authored": "2026-10-05",
+    "signatures_verified_on": null,
+    "how_to_verify": "d3ta1l3r calibrate --sites <id>   # probes a handle that cannot exist, and optionally one that does: d3ta1l3r calibrate --expect-hit <id>=your_handle",
+    "honesty_note": "These signatures were authored by hand and are NOT live-verified against the sites. Sites change layout without notice, which is why an ambiguous response is reported as an error (unknown) and never as a hit. Detector semantics: 'marker' requires a found_marker; 'absence' means HTTP 200 plus a known not-found phrase; 'status' is a plain 404/200 heuristic and may not claim better than medium confidence."
+  },
+  "sites": [
+    {
+      "id": "gitlab_user",
+      "name": "GitLab",
+      "url": "https://gitlab.com/{username}",
+      "category": "developer",
+      "detector": "status",
+      "confidence_found": "medium",
+      "docs_url": "https://docs.gitlab.com/ee/api/users.html",
+      "notes": "Anonymous 404 for an unknown namespace. Status-only heuristic.",
+      "weight": 210
+    },
+    {
+      "id": "codeberg_user",
+      "name": "Codeberg",
+      "url": "https://codeberg.org/{username}",
+      "category": "developer",
+      "detector": "status",
+      "confidence_found": "medium",
+      "notes": "Gitea returns 404 for unknown users. Status-only heuristic.",
+      "weight": 212
+    },
+    {
+      "id": "sourceforge_user",
+      "name": "SourceForge",
+      "url": "https://sourceforge.net/u/{username}/profile",
+      "category": "developer",
+      "detector": "status",
+      "confidence_found": "medium",
+      "notes": "Unknown accounts 404 on the profile route.",
+      "weight": 230
+    },
+    {
+      "id": "bitbucket_user",
+      "name": "Bitbucket",
+      "url": "https://bitbucket.org/{username}/",
+      "category": "developer",
+      "detector": "status",
+      "confidence_found": "medium",
+      "notes": "Workspace/profile pages 404 for unknown handles; project pages may differ.",
+      "weight": 232
+    },
+    {
+      "id": "codepen_user",
+      "name": "CodePen",
+      "url": "https://codepen.io/{username}",
+      "category": "developer",
+      "detector": "status",
+      "confidence_found": "medium",
+      "notes": "Unknown users 404.",
+      "weight": 234
+    },
+    {
+      "id": "jsfiddle_user",
+      "name": "JSFiddle",
+      "url": "https://jsfiddle.net/user/{username}/",
+      "category": "developer",
+      "detector": "status",
+      "confidence_found": "medium",
+      "notes": "Unknown users 404.",
+      "weight": 236
+    },
+    {
+      "id": "hashnode_user",
+      "name": "Hashnode",
+      "url": "https://hashnode.com/@{username}",
+      "category": "developer",
+      "detector": "status",
+      "confidence_found": "low",
+      "notes": "Unverified signature: Hashnode renders much of the profile client-side, so a 200 may be an empty shell. Treat as a lead only.",
+      "weight": 300
+    },
+    {
+      "id": "kaggle_user",
+      "name": "Kaggle",
+      "url": "https://www.kaggle.com/{username}",
+      "category": "developer",
+      "detector": "status",
+      "confidence_found": "medium",
+      "notes": "Unknown profiles 404.",
+      "weight": 238
+    },
+    {
+      "id": "leetcode_user",
+      "name": "LeetCode",
+      "url": "https://leetcode.com/{username}/",
+      "category": "developer",
+      "detector": "status",
+      "confidence_found": "medium",
+      "notes": "Unknown profiles 404.",
+      "weight": 240
+    },
+    {
+      "id": "codewars_user",
+      "name": "Codewars",
+      "url": "https://www.codewars.com/users/{username}",
+      "category": "developer",
+      "detector": "status",
+      "confidence_found": "medium",
+      "notes": "Rails app: unknown users 404.",
+      "weight": 242
+    },
+    {
+      "id": "exercism_user",
+      "name": "Exercism",
+      "url": "https://exercism.org/profiles/{username}",
+      "category": "developer",
+      "detector": "status",
+      "confidence_found": "medium",
+      "notes": "Unknown profiles 404.",
+      "weight": 244
+    },
+    {
+      "id": "huggingface_user",
+      "name": "Hugging Face",
+      "url": "https://huggingface.co/{username}",
+      "category": "developer",
+      "detector": "status",
+      "confidence_found": "medium",
+      "notes": "Unknown users 404. Model/dataset namespaces share this URL space.",
+      "weight": 246
+    },
+    {
+      "id": "crates_user",
+      "name": "crates.io",
+      "url": "https://crates.io/users/{username}",
+      "category": "developer",
+      "detector": "status",
+      "confidence_found": "medium",
+      "notes": "Unknown users 404.",
+      "weight": 248
+    },
+    {
+      "id": "pypi_user",
+      "name": "PyPI",
+      "url": "https://pypi.org/user/{username}/",
+      "category": "developer",
+      "detector": "status",
+      "confidence_found": "medium",
+      "notes": "Warehouse user profile pages 404 for unknown accounts.",
+      "weight": 250
+    },
+    {
+      "id": "rubygems_user",
+      "name": "RubyGems",
+      "url": "https://rubygems.org/profiles/{username}",
+      "category": "developer",
+      "detector": "status",
+      "confidence_found": "low",
+      "notes": "Unverified signature; confirm with calibrate before trusting a 200.",
+      "weight": 302
+    },
+    {
+      "id": "packagist_user",
+      "name": "Packagist",
+      "url": "https://packagist.org/users/{username}/",
+      "category": "developer",
+      "detector": "status",
+      "confidence_found": "medium",
+      "notes": "Unknown maintainers 404.",
+      "weight": 252
+    },
+    {
+      "id": "instagram_user",
+      "name": "Instagram",
+      "url": "https://www.instagram.com/{username}/",
+      "category": "social",
+      "detector": "marker",
+      "not_found_marker": "Sorry, this page isn't available",
+      "login_redirect_markers": ["/accounts/login", "/accounts/signup"],
+      "confidence_found": "medium",
+      "notes": "Logged-out clients are frequently redirected to a sign-in wall; that is reported as blocked (unknown), not as absent. Prefer checking in your own browser session.",
+      "weight": 260
+    },
+    {
+      "id": "tumblr_user",
+      "name": "Tumblr",
+      "url": "https://{username}.tumblr.com",
+      "category": "social",
+      "detector": "status",
+      "confidence_found": "medium",
+      "notes": "Unknown subdomains 404. Custom-domain blogs will not be found this way.",
+      "weight": 262
+    },
+    {
+      "id": "pinterest_user",
+      "name": "Pinterest",
+      "url": "https://www.pinterest.com/{username}/",
+      "category": "social",
+      "detector": "status",
+      "confidence_found": "medium",
+      "notes": "Unknown users 404.",
+      "weight": 264
+    },
+    {
+      "id": "vimeo_user",
+      "name": "Vimeo",
+      "url": "https://vimeo.com/{username}",
+      "category": "media",
+      "detector": "status",
+      "confidence_found": "medium",
+      "notes": "Unknown users 404.",
+      "weight": 266
+    },
+    {
+      "id": "youtube_user",
+      "name": "YouTube",
+      "url": "https://www.youtube.com/@{username}",
+      "category": "media",
+      "detector": "status",
+      "confidence_found": "medium",
+      "notes": "Handle URLs 404 for unknown handles; channels referenced by ID are not covered.",
+      "weight": 268
+    },
+    {
+      "id": "twitch_user",
+      "name": "Twitch",
+      "url": "https://www.twitch.tv/{username}",
+      "category": "media",
+      "detector": "absence",
+      "not_found_marker": "time machine, that content is unavailable",
+      "confidence_found": "medium",
+      "notes": "Twitch reuses its 'content is unavailable' page for suspended and deleted channels as well as unknown ones, so a hit is evidence of a profile URL but not of an active account.",
+      "weight": 270
+    },
+    {
+      "id": "letterboxd_user",
+      "name": "Letterboxd",
+      "url": "https://letterboxd.com/{username}/",
+      "category": "media",
+      "detector": "status",
+      "confidence_found": "medium",
+      "notes": "Unknown users 404.",
+      "weight": 272
+    },
+    {
+      "id": "lastfm_user",
+      "name": "Last.fm",
+      "url": "https://www.last.fm/user/{username}",
+      "category": "music",
+      "detector": "status",
+      "confidence_found": "medium",
+      "notes": "Unknown users 404.",
+      "weight": 274
+    },
+    {
+      "id": "myanimelist_user",
+      "name": "MyAnimeList",
+      "url": "https://myanimelist.net/profile/{username}",
+      "category": "media",
+      "detector": "status",
+      "confidence_found": "medium",
+      "notes": "Unknown users 404.",
+      "weight": 276
+    },
+    {
+      "id": "anilist_user",
+      "name": "AniList",
+      "url": "https://anilist.co/user/{username}/",
+      "category": "media",
+      "detector": "status",
+      "confidence_found": "medium",
+      "notes": "Server-rendered profile route returns 404 for unknown users.",
+      "weight": 278
+    },
+    {
+      "id": "trakt_user",
+      "name": "Trakt",
+      "url": "https://trakt.tv/users/{username}",
+      "category": "media",
+      "detector": "status",
+      "confidence_found": "medium",
+      "notes": "Unknown users 404.",
+      "weight": 280
+    },
+    {
+      "id": "soundcloud_user",
+      "name": "SoundCloud",
+      "url": "https://soundcloud.com/{username}",
+      "category": "music",
+      "detector": "status",
+      "confidence_found": "medium",
+      "notes": "Unknown users 404.",
+      "weight": 282
+    },
+    {
+      "id": "mixcloud_user",
+      "name": "Mixcloud",
+      "url": "https://www.mixcloud.com/{username}/",
+      "category": "music",
+      "detector": "status",
+      "confidence_found": "medium",
+      "notes": "Unknown users 404.",
+      "weight": 284
+    },
+    {
+      "id": "bandcamp_user",
+      "name": "Bandcamp",
+      "url": "https://bandcamp.com/{username}",
+      "category": "music",
+      "detector": "status",
+      "confidence_found": "low",
+      "notes": "Unverified signature; Bandcamp pages have changed shape repeatedly. Treat a 200 as a lead.",
+      "weight": 304
+    },
+    {
+      "id": "untappd_user",
+      "name": "Untappd",
+      "url": "https://untappd.com/user/{username}",
+      "category": "lifestyle",
+      "detector": "status",
+      "confidence_found": "medium",
+      "notes": "Unknown users 404.",
+      "weight": 286
+    },
+    {
+      "id": "steam_user",
+      "name": "Steam",
+      "url": "https://steamcommunity.com/id/{username}",
+      "category": "gaming",
+      "detector": "absence",
+      "not_found_marker": "The specified profile could not be found.",
+      "confidence_found": "high",
+      "notes": "Steam's error page is served with HTTP 200 and a very stable phrase, which makes the absence detector reliable. Vanity URLs only; numeric SteamID profiles are not covered.",
+      "weight": 220
+    },
+    {
+      "id": "itch_user",
+      "name": "itch.io",
+      "url": "https://{username}.itch.io",
+      "category": "gaming",
+      "detector": "status",
+      "confidence_found": "medium",
+      "notes": "Unknown subdomains 404.",
+      "weight": 290
+    },
+    {
+      "id": "osu_user",
+      "name": "osu!",
+      "url": "https://osu.ppy.sh/users/{username}",
+      "category": "gaming",
+      "detector": "status",
+      "confidence_found": "medium",
+      "notes": "Unknown users 404.",
+      "weight": 292
+    },
+    {
+      "id": "deviantart_user",
+      "name": "DeviantArt",
+      "url": "https://www.deviantart.com/{username}",
+      "category": "design",
+      "detector": "status",
+      "confidence_found": "medium",
+      "notes": "Unknown users 404.",
+      "weight": 294
+    },
+    {
+      "id": "behance_user",
+      "name": "Behance",
+      "url": "https://www.behance.net/{username}",
+      "category": "design",
+      "detector": "status",
+      "confidence_found": "medium",
+      "notes": "Unknown users 404.",
+      "weight": 296
+    },
+    {
+      "id": "dribbble_user",
+      "name": "Dribbble",
+      "url": "https://dribbble.com/{username}",
+      "category": "design",
+      "detector": "status",
+      "confidence_found": "medium",
+      "notes": "Unknown users 404.",
+      "weight": 298
+    },
+    {
+      "id": "artstation_user",
+      "name": "ArtStation",
+      "url": "https://www.artstation.com/{username}",
+      "category": "design",
+      "detector": "status",
+      "confidence_found": "medium",
+      "notes": "Unknown users 404.",
+      "weight": 300
+    },
+    {
+      "id": "medium_user",
+      "name": "Medium",
+      "url": "https://medium.com/@{username}",
+      "category": "writing",
+      "detector": "status",
+      "confidence_found": "medium",
+      "notes": "Unknown handles 404; publication and custom-domain blogs are not covered.",
+      "weight": 306
+    },
+    {
+      "id": "hackernews_user",
+      "name": "Hacker News",
+      "url": "https://news.ycombinator.com/user?id={username}",
+      "category": "community",
+      "detector": "absence",
+      "not_found_marker": "No such user.",
+      "confidence_found": "high",
+      "notes": "HN renders 'No such user.' with HTTP 200 for unknown handles; the phrase has been stable for years.",
+      "weight": 222
+    },
+    {
+      "id": "lobsters_user",
+      "name": "Lobsters",
+      "url": "https://lobste.rs/~{username}",
+      "category": "community",
+      "detector": "status",
+      "confidence_found": "medium",
+      "notes": "Unknown users 404 on the tilde-profile route.",
+      "weight": 308
+    },
+    {
+      "id": "wikipedia_user",
+      "name": "Wikipedia (user page)",
+      "url": "https://en.wikipedia.org/wiki/User:{username}",
+      "category": "community",
+      "detector": "absence",
+      "not_found_marker": "does not have a user page with this exact name",
+      "confidence_found": "high",
+      "notes": "MediaWiki serves the 'no such user page' notice with HTTP 200; the absence detector is exact here. A present user page does not imply recent activity.",
+      "weight": 224
+    },
+    {
+      "id": "aboutme_user",
+      "name": "about.me",
+      "url": "https://about.me/{username}",
+      "category": "identity",
+      "detector": "status",
+      "confidence_found": "medium",
+      "notes": "Unknown profiles 404.",
+      "weight": 310
+    },
+    {
+      "id": "duolingo_user",
+      "name": "Duolingo",
+      "url": "https://www.duolingo.com/profile/{username}",
+      "category": "learning",
+      "detector": "status",
+      "confidence_found": "low",
+      "notes": "Unverified signature; Duolingo is a client-rendered app. Treat a 200 as a lead only.",
+      "weight": 312
+    },
+    {
+      "id": "goodreads_user",
+      "name": "Goodreads",
+      "url": "https://www.goodreads.com/{username}",
+      "category": "books",
+      "detector": "status",
+      "confidence_found": "low",
+      "notes": "Unverified signature; Goodreads sometimes answers 200 for unknown profiles. Calibrate before trusting.",
+      "weight": 314
+    },
+    {
+      "id": "x_user",
+      "name": "X (Twitter)",
+      "url": "https://x.com/{username}",
+      "category": "social",
+      "detector": "status",
+      "confidence_found": "low",
+      "enabled_by_default": false,
+      "notes": "Disabled by default: X requires a signed-in session for profile pages and blocks anonymous scripted clients. Check your profile manually while signed in.",
+      "weight": 400
+    },
+    {
+      "id": "facebook_user",
+      "name": "Facebook",
+      "url": "https://www.facebook.com/{username}",
+      "category": "social",
+      "detector": "status",
+      "confidence_found": "low",
+      "enabled_by_default": false,
+      "notes": "Disabled by default: Facebook serves a login wall to anonymous clients and its ToS prohibits automated access. Use the platform's own 'View as public' tool.",
+      "weight": 401
+    },
+    {
+      "id": "tiktok_user",
+      "name": "TikTok",
+      "url": "https://www.tiktok.com/@{username}",
+      "category": "social",
+      "detector": "status",
+      "confidence_found": "low",
+      "enabled_by_default": false,
+      "notes": "Disabled by default: TikTok aggressively fingerprints and blocks anonymous scripted clients.",
+      "weight": 402
+    },
+    {
+      "id": "reddit_user",
+      "name": "Reddit",
+      "url": "https://www.reddit.com/user/{username}/",
+      "category": "social",
+      "detector": "status",
+      "confidence_found": "low",
+      "enabled_by_default": false,
+      "notes": "Disabled by default: Reddit blocks anonymous scripted clients and now requires OAuth for its API. Review your profile while signed in, or use your own API credentials outside this tool.",
+      "weight": 403
+    },
+    {
+      "id": "quora_user",
+      "name": "Quora",
+      "url": "https://www.quora.com/profile/{username}",
+      "category": "social",
+      "detector": "status",
+      "confidence_found": "low",
+      "enabled_by_default": false,
+      "notes": "Disabled by default: Quora gates profiles behind a sign-in wall.",
+      "weight": 404
+    },
+    {
+      "id": "telegram_user",
+      "name": "Telegram",
+      "url": "https://t.me/{username}",
+      "category": "social",
+      "detector": "status",
+      "confidence_found": "low",
+      "enabled_by_default": false,
+      "notes": "Disabled by default: t.me answers 200 for both existing and missing handles, so a status check would be a coin flip. Use Telegram's in-app search instead.",
+      "weight": 405
+    },
+    {
+      "id": "snapchat_user",
+      "name": "Snapchat",
+      "url": "https://www.snapchat.com/add/{username}",
+      "category": "social",
+      "detector": "status",
+      "confidence_found": "low",
+      "enabled_by_default": false,
+      "notes": "Disabled by default: unverified, client-rendered, and rate-limited aggressively.",
+      "weight": 406
+    },
+    {
+      "id": "vk_user",
+      "name": "VK",
+      "url": "https://vk.com/{username}",
+      "category": "social",
+      "detector": "status",
+      "confidence_found": "low",
+      "enabled_by_default": false,
+      "notes": "Disabled by default: VK answers 200 for unknown vanity names, so status detection does not work.",
+      "weight": 407
+    },
+    {
+      "id": "substack_user",
+      "name": "Substack",
+      "url": "https://substack.com/@{username}",
+      "category": "writing",
+      "detector": "status",
+      "confidence_found": "low",
+      "enabled_by_default": false,
+      "notes": "Disabled by default: unverified, client-rendered. Run `d3ta1l3r calibrate --sites substack_user` and pin the answer in this file before enabling it.",
+      "weight": 408
+    },
+    {
+      "id": "producthunt_user",
+      "name": "Product Hunt",
+      "url": "https://www.producthunt.com/@{username}",
+      "category": "community",
+      "detector": "status",
+      "confidence_found": "low",
+      "enabled_by_default": false,
+      "notes": "Disabled by default: unverified signature and a client-rendered profile page.",
+      "weight": 409
+    },
+    {
+      "id": "flickr_user",
+      "name": "Flickr",
+      "url": "https://www.flickr.com/people/{username}",
+      "category": "media",
+      "detector": "status",
+      "confidence_found": "low",
+      "enabled_by_default": false,
+      "notes": "Disabled by default: Flickr identifies people by NSID, so a vanity path is not a reliable lookup.",
+      "weight": 410
+    },
+    {
+      "id": "patreon_user",
+      "name": "Patreon",
+      "url": "https://www.patreon.com/{username}",
+      "category": "lifestyle",
+      "detector": "status",
+      "confidence_found": "low",
+      "enabled_by_default": false,
+      "notes": "Disabled by default: unverified signature; Patreon serves a client-rendered shell.",
+      "weight": 411
+    }
+  ]
+}
