@@ -17,6 +17,7 @@ import hashlib
 import json
 from collections.abc import Callable
 from typing import Any
+from urllib.parse import unquote
 
 import httpx
 
@@ -51,6 +52,18 @@ _BLOCKED_SITES = {"instagram_user"}
 #: must flag exactly this one as a false positive — that is the offline way to
 #: show the detection working instead of asserting it.
 _NOISY_SITES = {"codepen_user"}
+#: Passwords the synthetic Pwned Passwords endpoint reports as breached, so the
+#: k-anonymity flow can be demonstrated end to end without touching the network.
+#: Every other password comes back clean, exactly as a real range lookup would.
+#: Addresses the synthetic HIBP endpoint reports as breached. They are obvious
+#: placeholders: demo mode must never look like it found something real.
+_DEMO_BREACHED_ACCOUNTS = {"alice@example.com", "demo@example.com"}
+
+_DEMO_PWNED_PASSWORDS = {
+    "demo-password-123": 3,
+    "hunter2": 5,
+}
+
 #: Hosts that "disallow" automated checks in demo mode, to exercise the robots path.
 _ROBOTS_DENIED_HOSTS = ("myanimelist.net",)
 
@@ -134,6 +147,8 @@ class DemoTransport(httpx.AsyncBaseTransport):
             "rdap.org/domain/": self._rdap,
             # Deliberately "down" so the error path shows up in demo reports.
             "api.openalex.org": lambda url: _json({"error": "service unavailable"}, 503),
+            "api.pwnedpasswords.com": self._pwned_passwords,
+            "haveibeenpwned.com": self._hibp_breaches,
             "export.arxiv.org": self._arxiv,
             "eutils.ncbi.nlm.nih.gov": self._pubmed,
             "pub.orcid.org": self._orcid,
@@ -352,6 +367,51 @@ class DemoTransport(httpx.AsyncBaseTransport):
             {"title": "Demo (disambiguation)", "pageid": 1},
             {"title": "Demo User (synthetic)", "pageid": 2},
         ]}})
+
+    def _hibp_breaches(self, url: str) -> tuple[int, dict, str]:
+        """Synthetic HIBP account lookup: one demo address is "breached", the rest are not."""
+        account = url.split("breachedaccount/", 1)[-1].split("?")[0]
+        account = unquote(account).strip().lower()
+        if account in _DEMO_BREACHED_ACCOUNTS:
+            return 200, {"content-type": "application/json"}, json.dumps(
+                [
+                    {
+                        "Name": "SyntheticFixture",
+                        "Title": "Synthetic Fixture Breach",
+                        "BreachDate": "2019-03-04",
+                        "PwnCount": 3,
+                        "DataClasses": ["Email addresses", "Passwords"],
+                    },
+                    {
+                        "Name": "DemoCorpusDump",
+                        "Title": "Demo Corpus Dump",
+                        "BreachDate": "2021-11-19",
+                        "PwnCount": 3,
+                        "DataClasses": ["Email addresses"],
+                    },
+                ]
+            )
+        return 404, {"content-type": "application/json"}, json.dumps(
+            {"statusCode": 404, "message": "No breaches found"}
+        )
+
+    def _pwned_passwords(self, url: str) -> tuple[int, dict, str]:
+        """Synthetic k-anonymity range response.
+
+        The request only ever carries a five-character hash prefix, so the demo
+        endpoint computes the SHA-1 of its known passwords locally and answers
+        with the matching suffix — the same shape a real lookup returns.
+        """
+        prefix = url.rstrip("/").rsplit("/", 1)[-1].upper()
+        lines = [
+            "0000000000000000000000000000000000A:1",
+            "0000000000000000000000000000000000B:2",
+        ]
+        for password, count in _DEMO_PWNED_PASSWORDS.items():
+            digest = hashlib.sha1(password.encode("utf-8")).hexdigest().upper()
+            if digest.startswith(prefix):
+                lines.append(f"{digest[5:]}:{count}")
+        return 200, {"content-type": "text/plain"}, "\r\n".join(lines) + "\r\n"
 
     def _generic_probe(self, url: str) -> tuple[int, dict, str]:
         site_id = _site_id_for(url)

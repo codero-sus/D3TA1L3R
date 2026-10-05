@@ -226,15 +226,176 @@
     }
   }
 
+  /* ---------------------------------------------------------------- breach watch
+   * The watchlist is only present when the dashboard was started with a vault.
+   * Nothing here ever echoes a secret back into the page: the API answers with
+   * masked values and counts, and the password field is cleared as soon as it is
+   * submitted.
+   */
+
+  function breachLine(check) {
+    const label = check.label || check.masked_value;
+    const where = check.label && check.label !== check.masked_value
+      ? " (" + check.masked_value + ")"
+      : "";
+    return label + where + " — " + check.source_name + ": " + (check.detail || check.evidence);
+  }
+
+  function renderBreachResult(payload) {
+    const node = $("#vault-check-result");
+    if (!node) return;
+    if (!payload) {
+      node.innerHTML = "";
+      return;
+    }
+    const report = payload.report || payload;
+    const checks = report.checks || [];
+    const unavailable = report.unavailable_sources || [];
+    const pwned = checks.filter((c) => c.status === "pwned");
+    const gaps = checks.filter((c) => c.status !== "pwned" && c.status !== "clean");
+    const lines = [];
+    if (report.headline) lines.push("<p><b>" + escapeHtml(report.headline) + "</b></p>");
+    if (pwned.length) {
+      lines.push('<p class="warn-text"><b>Found in breach data</b></p>');
+      pwned.forEach((c) => lines.push("<p>" + escapeHtml(breachLine(c)) + "</p>"));
+      lines.push(
+        '<p class="fineprint">Change this password everywhere it was used, starting with ' +
+          "your email account, and turn on two-factor authentication.</p>"
+      );
+    } else if (checks.length && !gaps.length) {
+      lines.push('<p class="ok-text"><b>Not found</b> in the sources configured.</p>');
+    }
+    if (gaps.length) {
+      lines.push('<p class="muted"><b>Not checked</b> (a gap, not a pass):</p>');
+      gaps.forEach((c) => lines.push('<p class="muted">' + escapeHtml(breachLine(c)) + "</p>"));
+    }
+    if (!checks.length) {
+      const names = unavailable.map((g) => g.source_name);
+      lines.push(
+        '<p class="muted">Nothing could check this entry' +
+          (names.length ? " (" + escapeHtml(names.join(", ")) + " unavailable)" : "") +
+          ". Configure a source and try again.</p>"
+      );
+    }
+    node.innerHTML = lines.join("");
+  }
+
+  function escapeHtml(value) {
+    return String(value).replace(/[&<>"']/g, (ch) => ({
+      "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;",
+    }[ch]));
+  }
+
+  async function addToWatchlist(event) {
+    event.preventDefault();
+    const form = event.target;
+    const status = $("#vault-status");
+    const data = new FormData(form);
+    const kind = String(data.get("kind") || "email");
+    const value = String(data.get("value") || "");
+    const payload = {
+      kind: kind,
+      value: value,
+      label: String(data.get("label") || ""),
+      store_hash: Boolean(form.querySelector('[name="store_hash"]').checked),
+      check_now: true,
+    };
+    if (!value) {
+      status.textContent = "Enter a value first.";
+      return;
+    }
+    status.textContent = "Checking…";
+    try {
+      const response = await fetch("/api/vault/entries", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+      const body = await response.json();
+      if (!response.ok) throw new Error(body.detail || "the dashboard rejected the entry");
+      form.reset();
+      status.textContent = body.created ? "Added." : "Already on the watchlist.";
+      renderBreachResult(body.check);
+    } catch (error) {
+      status.textContent = String(error.message || error);
+    }
+  }
+
+  async function runBreachCheck() {
+    const button = $("#breach-run");
+    const status = $("#breach-run-status");
+    if (!button) return;
+    button.disabled = true;
+    status.textContent = "checking your watchlist…";
+    try {
+      const response = await fetch("/api/breach/check", { method: "POST" });
+      const body = await response.json();
+      if (!response.ok) throw new Error(body.detail || "could not start the check");
+      status.textContent = body.started ? "running…" : "already running";
+      pollBreach();
+    } catch (error) {
+      status.textContent = String(error.message || error);
+      button.disabled = false;
+    }
+  }
+
+  async function pollBreach() {
+    const status = $("#breach-run-status");
+    const button = $("#breach-run");
+    try {
+      const response = await fetch("/api/breach");
+      const body = await response.json();
+      if (body.status === "running") {
+        setTimeout(pollBreach, 1500);
+        return;
+      }
+      if (status) {
+        status.textContent = body.headline || "";
+      }
+      if (button) button.disabled = false;
+      // A finished check changes the table's "last check" column.
+      if (body.status === "done" || body.status === "error") {
+        setTimeout(() => window.location.reload(), 900);
+      }
+    } catch (error) {
+      if (button) button.disabled = false;
+      if (status) status.textContent = String(error.message || error);
+    }
+  }
+
+  function wireVault() {
+    const form = $("#vault-form");
+    if (form) form.addEventListener("submit", addToWatchlist);
+    const run = $("#breach-run");
+    if (run) run.addEventListener("click", runBreachCheck);
+    document.querySelectorAll("[data-vault-delete]").forEach((button) => {
+      button.addEventListener("click", async () => {
+        const id = button.getAttribute("data-vault-delete");
+        if (!window.confirm("Remove this identifier from the watchlist?")) return;
+        await fetch("/api/vault/entries/" + encodeURIComponent(id), { method: "DELETE" });
+        window.location.reload();
+      });
+    });
+    const state = $("#breach-status");
+    if (state && state.getAttribute("data-status") === "running") pollBreach();
+  }
+
   function boot() {
     const form = $("#scan-form");
     if (form) form.addEventListener("submit", startScan);
     const calibrate = $("#calibrate-btn");
     if (calibrate) calibrate.addEventListener("click", runCalibration);
     wireDeletes();
+    wireVault();
   }
 
-  window.D3TA1L3R = { watchRun: watchRun, startScan: startScan, runCalibration: runCalibration };
+  window.D3TA1L3R = {
+    watchRun: watchRun,
+    startScan: startScan,
+    runCalibration: runCalibration,
+    runBreachCheck: runBreachCheck,
+    addToWatchlist: addToWatchlist,
+  };
   if (document.readyState === "loading") {
     document.addEventListener("DOMContentLoaded", boot);
   } else {

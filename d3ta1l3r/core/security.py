@@ -26,6 +26,8 @@ __all__ = [
     "assert_public_url",
     "is_public_host",
     "mask_email",
+    "mask_phone",
+    "normalise_phone",
     "redact",
     "registrable_domain",
     "render_template",
@@ -34,6 +36,7 @@ __all__ = [
     "validate_email",
     "validate_location",
     "validate_name",
+    "validate_phone",
     "validate_source_id",
     "validate_template",
     "validate_username",
@@ -342,3 +345,59 @@ def mask_email(email: str) -> str:
         return "***"
     masked = (local[:2] + "***") if len(local) > 2 else "***"
     return f"{masked}@{domain}"
+
+
+def normalise_phone(value: str) -> str:
+    """Reduce a phone number to ``+<digits>`` (or bare digits if no ``+``).
+
+    People paste numbers with spaces, dashes, dots and brackets; E.164 allows
+    15 digits, national numbering plans need at least 7. A leading ``+`` is
+    preserved because it is the only signal that the number is in international
+    form (and therefore globally unambiguous).
+    """
+    if not isinstance(value, str):
+        raise UsageError("phone number must be a string")
+    raw = value.strip()
+    if not raw:
+        raise UsageError("phone number is empty")
+    international = raw.startswith("+")
+    if international:
+        raw = raw[1:]
+    elif raw.startswith("00") and len(raw) > 8:
+        # "00" is the ITU international access code; treat it as such.
+        international = True
+        raw = raw[2:]
+    digits = re.sub(r"[\s().\u2011\u2013-]", "", raw)
+    if not digits.isdigit():
+        raise UsageError(
+            "phone number may only contain digits, spaces, brackets, dots and dashes"
+        )
+    if len(digits) < 7:
+        raise UsageError("phone number is too short to be a real number")
+    if len(digits) > 15:
+        raise UsageError("phone number is longer than the 15 digits E.164 allows")
+    return f"+{digits}" if international else digits
+
+
+def validate_phone(value: str) -> str:
+    """Validate a phone number you own, for breach watchlist checks.
+
+    D3TA1L3R never performs a reverse lookup, a carrier lookup, or anything else
+    that would turn a number into information about a person — a number is only
+    ever *compared* against breach data you supplied or a self-service breach
+    API. ``+`` is optional, but international form is strongly preferred.
+    """
+    return normalise_phone(value)
+
+
+def mask_phone(value: str) -> str:
+    """Mask a phone number, keeping the country prefix and the last two digits."""
+    number = value.strip()
+    if not number:
+        return "***"
+    international = number.startswith("+")
+    digits = re.sub(r"\D", "", number)
+    if len(digits) <= 4:
+        return "***"
+    head = digits[:2] if international else digits[:1]
+    return f"{'+' if international else ''}{head}******{digits[-2:]}"

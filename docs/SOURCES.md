@@ -188,3 +188,37 @@ are 81 sources, 68 enabled by default. Groups:
 - `community` — Hacker News, Lobsters, Wikipedia user pages
 - `learning` / `books` / `lifestyle` — Duolingo, Goodreads, Untappd, Patreon
 - `identity` — Gravatar, RDAP, Keybase, about.me
+
+## Breach sources
+
+These are not scan sources and do not appear in `d3ta1l3r sources`; they are what
+`d3ta1l3r breach` and the dashboard's watchlist talk to. Every one of them is
+bounded by what it is allowed to send — see `docs/SCOPE.md` §2a for the reasoning.
+
+| Source id | Needs | Sends | Answer |
+| --- | --- | --- | --- |
+| `pwned_passwords` | nothing | the first five hex characters of `SHA-1(password)` | `pwned` with a count, or `clean` |
+| `hibp_breaches` | your own HIBP API key | the email address and the key | `pwned` with breach names, or `clean` |
+| `local_corpus[FILE]` | a file you already have | nothing | match / no match, per entry |
+
+Rules that apply to a breach source (and are pinned in `tests/test_breach.py`):
+
+- **No acquisition.** A source never downloads, mirrors or bundles a corpus. The
+  local corpus is a file the operator supplies, and there is no code path that
+  fetches one.
+- **No secret retention.** A password is checked with the plaintext in memory for
+  the duration of the call. The vault keeps an outcome, and a SHA-1 verifier only
+  when the operator asked for one with `--store-hash`.
+- **No silent success.** A missing key, an HTTP 429, a malformed payload or a
+  missing corpus file produces `unknown` with a reason. `clean` requires an
+  answer from the service; a gap never becomes a pass.
+- **One identifier at a time.** Checks are per-entry and never enumerate. There
+  is no "search this corpus for everyone" mode, because that is the feature this
+  tool refuses to be.
+
+Build a local corpus from plaintext only if you own the data:
+
+```bash
+d3ta1l3r breach corpus-hash my-old-passwords.txt -o corpus/
+d3ta1l3r breach run --corpus corpus/my-old-passwords-sha1.txt
+```
