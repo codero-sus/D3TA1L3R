@@ -1,0 +1,145 @@
+{% extends "base.html" %}
+{% block title %}{{ title }} — dashboard{% endblock %}
+
+{% block hero %}
+<section class="hero">
+  <h1>What of yours is already public?</h1>
+  <p>
+    Enter an identifier you own. D3TA1L3R checks it across
+    <b>{{ sources_count }}</b> public sources — profile pages by signature and public JSON APIs
+    with structured records — then tells you what it found, how confident it is, and what it
+    could <em>not</em> check.
+  </p>
+</section>
+{% endblock %}
+
+{% block content %}
+<section class="grid">
+  <div class="panel">
+    <h2>New scan</h2>
+    <form id="scan-form" autocomplete="off">
+      <div class="fields">
+        <label>Username / handle <span class="hint">(comma-separate to check several)</span>
+          <input type="text" name="username" placeholder="alice, alice_dev" spellcheck="false">
+        </label>
+        <label>Email
+          <input type="email" name="email" placeholder="you@example.com" spellcheck="false">
+        </label>
+        <label>Full name <span class="hint">(name-based lookups are low confidence)</span>
+          <input type="text" name="name" placeholder="Alice Doe">
+        </label>
+        <label>Domain you own <span class="hint">(RDAP registration check)</span>
+          <input type="text" name="domain" placeholder="example.com" spellcheck="false">
+        </label>
+        <label>Location <span class="hint">(context only; never used in queries)</span>
+          <input type="text" name="location" placeholder="Delhi, IN">
+        </label>
+      </div>
+
+      <details>
+        <summary>Advanced options</summary>
+        <div class="fields">
+          <label>Only these sources <span class="hint">(comma-separated ids, see Coverage)</span>
+            <input type="text" name="sources" placeholder="github_api_user,gravatar_api_email">
+          </label>
+          <label>Skip these sources
+            <input type="text" name="exclude_sources" placeholder="instagram_user">
+          </label>
+          <label>Categories
+            <input type="text" name="categories" placeholder="developer,identity">
+          </label>
+          <label>Max sources
+            <input type="number" name="max_sites" min="1" max="1000" placeholder="all">
+          </label>
+          <label>Concurrency
+            <input type="number" name="concurrency" min="1" max="64" placeholder="16">
+          </label>
+          <label>Minimum confidence
+            <select name="min_confidence">
+              <option value="">keep everything</option>
+              <option value="low">low and above</option>
+              <option value="medium">medium and above</option>
+              <option value="high">high and above</option>
+              <option value="confirmed">confirmed only</option>
+            </select>
+          </label>
+        </div>
+        <label class="check">
+          <input type="checkbox" name="demo" {% if demo_default %}checked{% endif %}>
+          Demo mode (synthetic results, no network requests)
+        </label>
+        <label class="check">
+          <input type="checkbox" name="respect_robots" checked>
+          Obey robots.txt (recommended)
+        </label>
+      </details>
+
+      <div class="actions">
+        <button type="submit" id="scan-submit">Run self-audit</button>
+        <span class="status" id="scan-status"></span>
+      </div>
+      <p class="fineprint">
+        Only the identifiers you type are queried. The dashboard stores reports under
+        <code>scans/</code> on this machine and nowhere else.
+      </p>
+    </form>
+  </div>
+
+  <div class="panel">
+    <h2>What gets checked</h2>
+    <ul class="clean">
+      <li><b>Public profile pages</b> — a curated set of sites, each with a declared signature
+        (404 semantics, a stable "no such user" phrase, or a sign-in wall).</li>
+      <li><b>Public JSON APIs</b> — GitHub, GitLab, Codeberg, Docker Hub, Keybase, Bluesky,
+        Mastodon, Chess.com, Lichess, Codeforces, npm, dev.to, Gravatar, RDAP and more.</li>
+      <li><b>Research records</b> — OpenAlex, arXiv, PubMed, ORCID and Wikipedia, always labelled
+        low confidence because names are not unique.</li>
+    </ul>
+    <h3>What it will never do</h3>
+    <ul class="clean muted">
+      <li>No people-search brokers, data brokers or breach corpora.</li>
+      <li>No login walls, CAPTCHAs or anti-bot controls circumvented.</li>
+      <li>No phone numbers, addresses or relatives — out of scope by design.</li>
+      <li>No queries about anyone but the identifiers you supply.</li>
+    </ul>
+    <h3>Confidence</h3>
+    <p class="confidence-legend">
+      <span class="badge confirmed">CONFIRMED</span> structured API record ·
+      <span class="badge high">HIGH</span> unambiguous site signal ·
+      <span class="badge medium">MEDIUM</span> signature heuristic ·
+      <span class="badge low">LOW</span> weak heuristic or same-name candidate
+    </p>
+  </div>
+</section>
+
+<section>
+  <h2>Stored scans</h2>
+  {% if scans %}
+  <table class="scans">
+    <thead>
+      <tr><th>Started</th><th>Target</th><th>Findings</th><th>Sources</th><th>Mode</th><th></th></tr>
+    </thead>
+    <tbody>
+      {% for scan in scans %}
+      <tr>
+        <td class="mono">{{ scan.started_at }}</td>
+        <td>{{ scan.target_display }}</td>
+        <td>{{ scan.findings }} from {{ scan.sources_hit }}</td>
+        <td>{{ scan.sources_total }} checked{% if scan.sources_failed %},
+            <span class="warn-text">{{ scan.sources_failed }} failed</span>{% endif %}</td>
+        <td>{% if scan.demo %}<span class="badge low">demo</span>{% else %}live{% endif %}</td>
+        <td class="row-actions">
+          <a href="/scans/{{ scan.scan_id }}">open</a>
+          {% if scan.has_html %}<a href="/api/scans/{{ scan.scan_id }}/report.html">html</a>{% endif %}
+          <a href="/api/scans/{{ scan.scan_id }}/report.md">md</a>
+          <button class="link danger" data-delete="{{ scan.scan_id }}">delete</button>
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  <p class="muted">No scans stored yet. Run one above — it takes a few seconds.</p>
+  {% endif %}
+</section>
+{% endblock %}

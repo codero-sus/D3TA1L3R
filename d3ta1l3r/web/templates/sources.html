@@ -1,0 +1,58 @@
+{% extends "base.html" %}
+{% block title %}Coverage — {{ title }}{% endblock %}
+
+{% block hero %}
+<section class="hero">
+  <h1>Source coverage</h1>
+  <p>
+    Every source D3TA1L3R can run, what it checks, and whether it is on by default.
+    Sources that fight automation, require a login, or are unverified ship
+    <b>disabled</b> — a gap is reported honestly instead of being papered over with a guess.
+  </p>
+</section>
+{% endblock %}
+
+{% block content %}
+{% set by_category = {} %}
+{% for source in sources %}
+  {% if by_category.update({source.category: by_category.get(source.category, []) + [source]}) %}{% endif %}
+{% endfor %}
+
+{% for category, rows in by_category | dictsort %}
+<section>
+  <h2>{{ category }} <span class="muted">({{ rows | length }})</span></h2>
+  <table class="coverage">
+    <thead><tr><th>Source</th><th>Identifier</th><th>What it returns</th><th>Default</th></tr></thead>
+    <tbody>
+      {% for row in rows %}
+      <tr>
+        <td>
+          {% if row.docs_url %}<a href="{{ row.docs_url }}" rel="noopener noreferrer nofollow">{{ row.name }}</a>
+          {% else %}{{ row.name }}{% endif %}
+          <div class="mono muted">{{ row.id }}</div>
+        </td>
+        <td>{{ row.kind }}</td>
+        <td>{{ row.description }}</td>
+        <td>{% if row.enabled_by_default %}<span class="badge high">on</span>
+            {% else %}<span class="badge low">off</span>{% endif %}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</section>
+{% endfor %}
+
+<section class="panel">
+  <h2>Calibrating signatures</h2>
+  <p>
+    HTML signatures are educated guesses until they are measured. This runs the bogus-handle
+    check: it probes handles that certainly do not exist and reports any site that claims to
+    have found them.
+  </p>
+  <div class="actions">
+    <button id="calibrate-btn">Run calibration</button>
+    <span class="status" id="calibrate-status"></span>
+  </div>
+  <pre class="log" id="calibrate-log" hidden></pre>
+</section>
+{% endblock %}
