@@ -61,7 +61,7 @@ git clone https://github.com/codero-sus/D3TA1L3R.git && cd D3TA1L3R
 python -m venv .venv && . .venv/bin/activate
 pip install -e .            # engine + CLI
 pip install -e '.[web]'     # ...plus the dashboard
-pip install -e '.[dev]'     # ...plus the test suite
+pip install -e '.[dev]'     # ...plus the dashboard stack and the test suite
 ```
 
 Python 3.10+. Runtime dependencies are `httpx` (the engine) and `cryptography`
@@ -294,7 +294,7 @@ d3ta1l3r/
   breach.py           breach sources: k-anonymity range API, HIBP, local corpus
   web/                FastAPI dashboard + templates + assets
     auth.py           sessions, login throttle, CSRF/origin guard
-tests/                466 tests, offline via httpx.MockTransport
+tests/                468 tests, offline via httpx.MockTransport
 ```
 
 Design rules enforced in code (and in the test suite):
@@ -320,7 +320,7 @@ Design rules enforced in code (and in the test suite):
 
 ```bash
 pip install -e '.[dev]'
-pytest                       # 466 tests, no network access required
+pytest                       # 468 tests, no network access required
 pytest -m network            # opt-in: the handful of live checks
 ruff check d3ta1l3r tests
 ```

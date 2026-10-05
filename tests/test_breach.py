@@ -299,6 +299,29 @@ class TestLocalCorpus:
         assert [e.kind for e in pwned] == [VaultKind.PASSWORD, VaultKind.EMAIL]
         assert report.checks_for(report.entries[2].entry_id)[-1].status is BreachStatus.CLEAN
 
+    async def test_a_match_is_described_without_echoing_the_corpus_line(
+        self, fetcher_factory, tmp_path: Path
+    ) -> None:
+        """The report says *that* something matched — never *what* matched.
+
+        A report is a file people paste into issues and chats, so the corpus
+        line that hit is the one thing that must not travel with it. The detail
+        keeps the shape of the match (a digest, a literal) and nothing else.
+        """
+        digest = hashlib.sha256(b"alice@example.com").hexdigest()
+        corpus = self._corpus(tmp_path, [f"sha256:{digest}"])
+        report = await run_breach_check(
+            [entry(VaultKind.EMAIL, "alice@example.com")],
+            scan_config=make_config(),
+            breach_config=breach_config(corpora=(corpus,)),
+        )
+        check = report.checks[-1]
+        assert check.status is BreachStatus.PWNED
+        assert "first match: a sha256 digest" in check.detail
+        rendered = report.to_json() + report.render_markdown()
+        assert digest not in rendered
+        assert "alice@example.com" not in rendered
+
     async def test_a_missing_corpus_is_a_named_gap(self, fetcher_factory, tmp_path: Path) -> None:
         missing = tmp_path / "gone.txt"
         report = await run_breach_check(

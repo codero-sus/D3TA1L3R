@@ -38,3 +38,33 @@ jobs:
           d3ta1l3r sources --enabled-only | head -5
           d3ta1l3r scan -u ci_smoke -e ci.smoke@example.com --demo -o /tmp/d3ta1l3r-ci
           d3ta1l3r scan -u ci_smoke --demo -o /tmp/d3ta1l3r-ci --compare "$(ls /tmp/d3ta1l3r-ci/*.json | head -1)" || true
+
+      - name: Smoke-test the vault and breach watch (demo, non-interactive)
+        run: |
+          printf 'ci-smoke-passphrase-123\n' > /tmp/d3ta1l3r-pass
+          chmod 600 /tmp/d3ta1l3r-pass
+          export D3TA1L3R_VAULT=/tmp/d3ta1l3r-ci/watchlist.vault
+          d3ta1l3r vault init --passphrase-file /tmp/d3ta1l3r-pass
+          d3ta1l3r vault add --kind email demo@example.com --passphrase-file /tmp/d3ta1l3r-pass --demo || test $? -eq 3
+          d3ta1l3r vault add --kind phone 9000000000 --passphrase-file /tmp/d3ta1l3r-pass --demo
+          d3ta1l3r vault list --json --passphrase-file /tmp/d3ta1l3r-pass > /tmp/d3ta1l3r-ci/watchlist.json
+          grep -q '"masked_value"' /tmp/d3ta1l3r-ci/watchlist.json
+          ! grep -q 'demo@example.com' /tmp/d3ta1l3r-ci/watchlist.json
+          d3ta1l3r breach run --demo --quiet --no-save --passphrase-file /tmp/d3ta1l3r-pass || test $? -eq 3
+          d3ta1l3r breach sources
+
+      - name: Smoke-test the dashboard
+        run: |
+          python - <<'PY'
+          from starlette.testclient import TestClient
+
+          from d3ta1l3r.web.app import AppSettings, create_app
+          from d3ta1l3r.web.auth import AuthSettings
+
+          app = create_app(AppSettings(demo=True, auth=AuthSettings()))
+          client = TestClient(app, follow_redirects=False)
+          assert client.get("/").status_code == 200
+          assert client.get("/api/health").json()["status"] == "ok"
+          assert client.get("/sources").status_code == 200
+          print("dashboard renders")
+          PY
