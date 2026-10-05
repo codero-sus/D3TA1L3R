@@ -582,7 +582,10 @@ class LocalCorpusSource(BreachSource):
             entry,
             BreachStatus.PWNED,
             count=count,
-            detail=f"{count} matching line(s) in {self.name} (first: {sample[:60]})",
+            detail=(
+                f"{count} matching line(s) in {self.name} "
+                f"(first match: {_match_kind(sample)})"
+            ),
             evidence=f"{self.name} contains this value or one of its hashes",
             breaches=[self.name],
         )
@@ -919,6 +922,21 @@ def _corpus_key(entry: VaultEntry) -> str | None:
     if entry.kind is VaultKind.PASSWORD:
         return f"sha1:{entry.password_sha1}" if entry.password_sha1 else None
     return f"plain:{entry.value.lower()}" if entry.value else None
+
+
+def _match_kind(sample: str) -> str:
+    """Describe a corpus match without echoing the corpus line into the report.
+
+    A report is a file people paste into issues and chats; the thing that matched
+    is exactly what must not travel with it.
+    """
+    tag = sample.split(":", 1)[0]
+    return {
+        "sha1": "a sha1 digest",
+        "sha256": "a sha256 digest",
+        "sha512": "a sha512 digest",
+        "plain": "a literal value",
+    }.get(tag, "a value")
 
 
 def _corpus_keys(entries: Iterable[VaultEntry]) -> dict[str, str]:
