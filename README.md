@@ -294,7 +294,7 @@ d3ta1l3r/
   breach.py           breach sources: k-anonymity range API, HIBP, local corpus
   web/                FastAPI dashboard + templates + assets
     auth.py           sessions, login throttle, CSRF/origin guard
-tests/                468 tests, offline via httpx.MockTransport
+tests/                469 tests, offline via httpx.MockTransport
 ```
 
 Design rules enforced in code (and in the test suite):
@@ -320,7 +320,7 @@ Design rules enforced in code (and in the test suite):
 
 ```bash
 pip install -e '.[dev]'
-pytest                       # 468 tests, no network access required
+pytest                       # 469 tests, no network access required
 pytest -m network            # opt-in: the handful of live checks
 ruff check d3ta1l3r tests
 ```
