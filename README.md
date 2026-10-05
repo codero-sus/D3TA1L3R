@@ -64,8 +64,10 @@ pip install -e '.[web]'     # ...plus the dashboard
 pip install -e '.[dev]'     # ...plus the test suite
 ```
 
-Python 3.10+. The only runtime dependency is `httpx`; the web dashboard adds
-FastAPI/uvicorn/Jinja2, and nothing else is needed even then.
+Python 3.10+. Runtime dependencies are `httpx` (the engine) and `cryptography`
+(the vault); the web dashboard adds FastAPI/uvicorn/Jinja2/python-multipart. The
+scanning engine itself is stdlib-only, and nothing is needed beyond those even
+then.
 
 ## Quick start
 
@@ -84,6 +86,17 @@ d3ta1l3r scan -u anything --demo
 
 # 5. Open the dashboard
 d3ta1l3r web --port 8000            # then browse http://localhost:8000
+
+# 6. Build an encrypted watchlist of your own identifiers
+d3ta1l3r vault init                 # prompts for a passphrase (>= 12 chars)
+d3ta1l3r vault add --kind email you@example.com --label personal
+d3ta1l3r vault add --kind password --store-hash   # checked via k-anonymity, never stored
+
+# 7. Check that watchlist against breach sources
+d3ta1l3r breach run                 # exit 3 if something was found, 2 if nothing could be checked
+
+# 8. ...and have the dashboard re-check it every time you log in
+d3ta1l3r web --vault --port 8000    # the login passphrase *is* the vault passphrase
 ```
 
 Reports land in `./scans/` as `20261005T091500Z-<target>-<scan_id>.{json,md,html}`.
@@ -154,6 +167,53 @@ that a site still detects an account you know exists. Results are saved to
 `scans/calibration-*.json`. Run this before trusting a `HIGH` label on a site
 you have never seen the tool check before.
 
+## Vault and breach watch
+
+Your identifiers live in one encrypted file, and the breach watch re-checks them.
+
+```bash
+d3ta1l3r vault init                       # scrypt + Fernet, written 0600
+d3ta1l3r vault add --kind email you@example.com --label personal
+d3ta1l3r vault add --kind phone "+91 98100 00010"
+d3ta1l3r vault add --kind username yourhandle
+d3ta1l3r vault list                       # masked values only
+d3ta1l3r vault where                      # path + file permissions, no passphrase needed
+d3ta1l3r vault rotate --new-passphrase-file new.txt
+d3ta1l3r breach run                       # check everything, record the outcome
+d3ta1l3r breach sources                   # what is usable, and what each one sends
+```
+
+`vault add` checks the entry immediately, so a password you paste is checked
+before it is forgotten. What the breach sources do and do not do:
+
+| Source | Needs | Sends | Answer |
+| --- | --- | --- | --- |
+| `pwned_passwords` | nothing | 5 hex characters of `SHA-1(password)` | `pwned` (with a count) or `clean` |
+| `hibp_breaches` | your own HIBP key | the email address itself | `pwned` (with breach names) or `clean` |
+| `local_corpus` | a file you supply (`--corpus`) | nothing | match / no match |
+
+Three rules the code enforces, because breach checking is where tools like this
+usually go wrong:
+
+- **Passwords are never stored.** `--store-hash` keeps a SHA-1 *verifier* so the
+  dashboard can re-check a password at login; without it, the password is checked
+  once and forgotten. Turn it off for anything you do not want testable offline
+  by someone who learns your vault passphrase.
+- **No dumps.** D3TA1L3R never downloads, mirrors or bundles a leaked database.
+  A corpus is a file you already have; `d3ta1l3r breach corpus-hash plain.txt`
+  turns a plaintext list into hashes so you can match without keeping the values.
+- **A gap is not a pass.** Without an HIBP key, or when a service rate-limits you,
+  or when a password has no verifier, the run reports `unknown` with a reason.
+  `breach run` exits `3` when something was found and `2` when nothing could be
+  checked at all — so a CI job can tell "clean" from "we could not look".
+
+Everything above also happens from the dashboard: `d3ta1l3r web --vault` asks for
+the vault passphrase **at login** (there is no second password to remember) and
+re-checks the watchlist the moment you sign in. The passphrase is entered in the
+browser and never passed to the server process as an argument; sessions are
+`HttpOnly` + `SameSite=Lax`, live 8 hours, and die when the process restarts.
+Five failed logins lock that address out for five minutes.
+
 ## Watching for changes
 
 ```bash
@@ -172,13 +232,19 @@ makes it a CI gate.
 d3ta1l3r web --port 8000            # binds 0.0.0.0 so containers/proxies can reach it
 d3ta1l3r web --host 127.0.0.1       # bind to loopback if you are the only user
 d3ta1l3r web --demo                 # synthetic results, no outbound requests
+d3ta1l3r web --vault --port 8000    # unlock your watchlist at login
 ```
 
 The dashboard runs scans, streams live progress over Server-Sent Events (with
 polling fallback), renders the same findings and coverage tables, offers
-JSON/Markdown/standalone-HTML export, and can run the calibration check. It
-stores everything in the same `scans/` directory as the CLI. All request URLs in
-the frontend are relative, so it works unchanged behind a reverse proxy.
+JSON/Markdown/standalone-HTML export, and can run the calibration check. With
+`--vault` it also serves the watchlist, masks every value it renders, and runs
+the breach watch at each login. It stores everything in the same `scans/`
+directory as the CLI (breach reports under `scans/breach/`). All request URLs in
+the frontend are relative, so it works unchanged behind a reverse proxy; the CSRF
+guard trusts the request `Host`, `X-Forwarded-Host`, anything in
+`D3TA1L3R_TRUSTED_ORIGINS`, and the E2B sandbox preview origin when
+`E2B_SANDBOX_ID` is set.
 
 ## Library use
 
@@ -209,7 +275,7 @@ More in [`examples/`](examples/): a quickstart and a custom source plugin.
 d3ta1l3r/
   models.py           typed results (Finding, SourceOutcome, ScanReport…), stdlib only
   config.py           timeouts, politeness limits, source filters
-  cli.py              scan | sources | calibrate | diff | web
+  cli.py              scan | sources | calibrate | diff | vault | breach | web
   core/
     security.py       identifier validation + the SSRF guard (every URL goes through it)
     http.py           one transport: manual redirects, retries, body caps, robots, cache
@@ -224,8 +290,11 @@ d3ta1l3r/
     probe.py          signature-driven public-page probes (specs live in data/sites.json)
     api/              typed clients for public JSON APIs
   data/sites.json     the signature database (data, not code)
+  vault.py            encrypted watchlist (scrypt + Fernet, atomic 0600 writes)
+  breach.py           breach sources: k-anonymity range API, HIBP, local corpus
   web/                FastAPI dashboard + templates + assets
-tests/                276 tests, offline via httpx.MockTransport
+    auth.py           sessions, login throttle, CSRF/origin guard
+tests/                466 tests, offline via httpx.MockTransport
 ```
 
 Design rules enforced in code (and in the test suite):
@@ -238,12 +307,20 @@ Design rules enforced in code (and in the test suite):
   instead of inventing a hit.
 - **Deterministic output.** Outcomes are ordered by source weight, so two scans
   of the same target diff cleanly.
+- **A check that did not happen is a gap.** `clean` is only ever produced by a
+  source that answered; everything else is `unknown` with a reason, in both the
+  scan engine and the breach watch. The tests assert that a missing key, a 429 or
+  a missing corpus never turns into good news.
+- **Secrets stay out of the process table.** The vault passphrase arrives by
+  prompt, `D3TA1L3R_VAULT_PASSPHRASE` or `--passphrase-file`; a password to check
+  arrives by prompt or stdin. Neither is ever an argument, and no password is ever
+  written to disk.
 
 ## Development
 
 ```bash
 pip install -e '.[dev]'
-pytest                       # 276 tests, no network access required
+pytest                       # 466 tests, no network access required
 pytest -m network            # opt-in: the handful of live checks
 ruff check d3ta1l3r tests
 ```
@@ -264,5 +341,11 @@ and the exit codes CI depends on.
   behaviour alone, and set a contact address
   (`export D3TA1L3R_UA_EMAIL=you@example.com`) so operators can reach you.
 - Reports are personal data. Keep them private; delete them when you are done.
+- Breach checking is for **your own** identifiers. Never point the watchlist at
+  an address you do not control: the HIBP endpoint takes a raw address, and
+  running it against somebody else's is exactly the abuse HIBP's own terms
+  prohibit.
+- D3TA1L3R ships no dump and never downloads one. If you keep a corpus, keep it
+  hashed (`d3ta1l3r breach corpus-hash`) and delete it when you are done.
 
 MIT licensed — see [LICENSE](LICENSE).

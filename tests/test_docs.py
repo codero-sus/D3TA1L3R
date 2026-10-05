@@ -35,7 +35,7 @@ class TestReadme:
             action for action in parser._actions if hasattr(action, "choices") and action.choices
         ]
         commands = set(subparsers[-1].choices)
-        assert commands == {"scan", "sources", "calibrate", "diff", "web"}
+        assert commands == {"scan", "sources", "calibrate", "diff", "vault", "breach", "web"}
         readme = _read("README.md")
         for command in commands:
             assert f"d3ta1l3r {command}" in readme, command
@@ -57,20 +57,52 @@ class TestReadme:
         assert f"{total} sources, {enabled} enabled by default" in sources_doc
 
     def test_documented_scope_refusals_match_the_code(self) -> None:
-        """The things SCOPE.md promises never happen must not exist in the source tree."""
+        """The services SCOPE.md refuses must not appear in the source tree.
+
+        Breach *checking* is in scope (SCOPE.md §2a), but only through the
+        k-anonymity range API, an HIBP key the operator supplies, and corpora the
+        operator already has. Broker-style search services never appear at all.
+        """
         forbidden = (
-            "haveibeenpwned",
-            "hibp",
             "whitepages",
             "spokeo",
             "truepeoplesearch",
             "dehashed",
             "intelx",
+            "beenverified",
+            "peoplefinders",
+            "snusbase",
+            "weleakinfo",
+            "leakcheck",
+            "breachdirectory",
+            "haveibeenpwned.com/api/v3/breaches",  # the "list every breach" endpoint
         )
         for path in (ROOT / "d3ta1l3r").rglob("*.py"):
             text = path.read_text(encoding="utf-8").lower()
             for needle in forbidden:
                 assert needle not in text, f"{needle} referenced in {path.name}"
+
+    def test_breach_checking_stays_on_the_documented_side_of_the_line(self) -> None:
+        """HIBP may only be reached from breach.py, and only for your own account."""
+        text = (ROOT / "d3ta1l3r" / "breach.py").read_text(encoding="utf-8").lower()
+        assert "api.pwnedpasswords.com/range/" in text
+        assert "hibp" in text
+        # No dump acquisition anywhere in the package.
+        offenders = []
+        for path in (ROOT / "d3ta1l3r").rglob("*.py"):
+            body = path.read_text(encoding="utf-8").lower()
+            for needle in ("magnet:", "torrent", "pastebin.com/raw", ".sql.gz", "7z"):
+                if needle in body:
+                    offenders.append(f"{path.name}: {needle}")
+        assert not offenders, offenders
+
+    def test_the_breach_stance_is_written_down(self) -> None:
+        scope = _read("docs/SCOPE.md").lower()
+        assert "k-anonymity" in scope
+        assert "five hexadecimal characters" in scope or "5 hex" in scope
+        assert "never downloads" in scope or "no corpus" in scope
+        readme = _read("README.md").lower()
+        assert "breach" in readme and "vault" in readme
 
     def test_license_is_linked(self) -> None:
         assert "[LICENSE](LICENSE)" in _read("README.md")

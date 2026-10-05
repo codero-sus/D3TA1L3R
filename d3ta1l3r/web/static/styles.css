@@ -139,3 +139,14 @@ footer {
   border-top: 1px solid var(--line); margin-top: 2rem; padding: 1.2rem clamp(1rem, 4vw, 3rem);
   color: var(--muted); font-size: .8rem; max-width: 1160px; margin-left: auto; margin-right: auto; width: 100%;
 }
+
+/* Watchlist, breach watch and the sign-in page. */
+.banner.error { background: rgba(248, 113, 113, .12); border-left: 3px solid var(--bad); margin-left: 0; margin-right: 0; }
+.panel.narrow { max-width: 520px; }
+.inline-form { display: inline; }
+.inline-form button { background: none; border: 0; padding: 0; }
+.ok-text { color: var(--ok); }
+.vault-table td.hint { white-space: nowrap; }
+#vault-check-result { margin-top: .7rem; }
+#vault-check-result p { margin: .25rem 0; font-size: .9rem; }
+#vault-check-result .fineprint { border-left: 3px solid var(--bad); padding-left: .6rem; }

@@ -1,20 +1,39 @@
 """FastAPI dashboard.
 
-Endpoints
----------
-``GET  /``                        dashboard: start a scan, browse past runs
+Pages
+-----
+``GET  /``                        dashboard: watchlist, breach watch, past scans
+``GET  /login`` ``POST /login``    sign in with the vault passphrase
+``POST /logout``                   end the session
+``GET  /scans/{id}``               a stored scan, or live progress for a run
+``GET  /sources``                  coverage: what gets checked, and what does not
+
+API
+---
 ``POST /api/scans``               start a scan (JSON body)
 ``GET  /api/scans``               list stored scans
 ``GET  /api/scans/{id}``          full report JSON
 ``GET  /api/scans/{id}/events``   Server-Sent Events progress stream
 ``GET  /api/scans/{id}/report.{json,md,html}``  downloads
-``GET  /api/sources``             source inventory (what gets checked, and why not)
-``POST /api/calibrate``           run a false-positive calibration pass
-``GET  /api/health``              liveness + effective settings
 ``DELETE /api/scans/{id}``        delete a stored scan
+``GET  /api/sources``             source inventory
+``POST /api/calibrate``           false-positive calibration pass
+``GET  /api/vault``               masked watchlist (auth required)
+``POST /api/vault/entries``       add a watched identifier (auth required)
+``DELETE /api/vault/entries/{id}`` remove one (auth required)
+``GET  /api/breach``              last breach-watch result (auth required)
+``POST /api/breach/check``        run a breach check now (auth required)
+``GET  /api/health``              liveness + effective settings
 
-The frontend uses only relative URLs, so it works unchanged behind a reverse
-proxy (including the sandbox preview host) and never calls localhost directly.
+Two security notes that the routes depend on:
+
+* **When a vault is configured, every page and API needs a session.** The vault
+  holds decrypted identifiers, so an authenticated dashboard is the only mode in
+  which it is exposed. Mutating requests are additionally origin-checked
+  (see :mod:`d3ta1l3r.web.auth`).
+* **The frontend uses only relative URLs**, so it works unchanged behind a
+  reverse proxy (including the sandbox preview host) and never calls localhost
+  directly.
 """
 
 from __future__ import annotations
@@ -27,11 +46,12 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.responses import (
     HTMLResponse,
     JSONResponse,
     PlainTextResponse,
+    RedirectResponse,
     StreamingResponse,
 )
 from fastapi.staticfiles import StaticFiles
@@ -39,6 +59,14 @@ from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel, Field
 
 from .. import __version__
+from ..breach import (
+    BreachConfig,
+    BreachReport,
+    record_outcomes,
+    run_breach_check,
+    save_breach_report,
+    transient_password_entry,
+)
 from ..config import RateLimitConfig, ScanConfig
 from ..core.engine import ScanEngine
 from ..core.report import render_html, render_json, render_markdown
@@ -46,12 +74,25 @@ from ..core.storage import ScanStore
 from ..errors import D3ta1l3rError, UsageError
 from ..models import Confidence, ScanEvent, ScanReport, ScanTarget
 from ..sources.probe import load_site_specs
+from ..vault import Vault, VaultError, VaultKind
+from .auth import (
+    MUTATING_METHODS,
+    AuthSettings,
+    LoginThrottle,
+    SessionManager,
+    clear_session_cookie,
+    client_key,
+    default_trusted_origins,
+    origin_allowed,
+    set_session_cookie,
+)
 
 _HERE = Path(__file__).resolve().parent
 _MAX_EVENTS = 500
 _SSE_HEARTBEAT_SECONDS = 15.0
 _MAX_TARGETS = 8
 """Upper bound on how many identifier combinations one dashboard scan may expand to."""
+_SAFE_NEXT_PREFIX = "/"
 
 
 @dataclass(slots=True)
@@ -60,9 +101,53 @@ class AppSettings:
     demo: bool = False
     config: ScanConfig = field(default_factory=ScanConfig)
     title: str = "D3TA1L3R"
+    auth: AuthSettings = field(default_factory=AuthSettings)
+    vault: Vault | None = None
+    vault_path: Path | None = None
+    """A vault to unlock at login. The passphrase is never read at startup."""
+    breach_config: BreachConfig = field(default_factory=BreachConfig)
+    trusted_origins: tuple[str, ...] = ()
 
     def base_config(self) -> ScanConfig:
-        return self.config
+        """The config every scan inherits — including the dashboard's demo switch.
+
+        ``demo`` is user-visible state (the banner at the top of every page), so it
+        has to reach the engine through one path rather than being applied per call
+        site; breach checks derive their own demo flag from this config.
+        """
+        if self.demo == self.config.demo:
+            return self.config
+        return self.config.replaced(demo=self.demo)
+
+    @property
+    def auth_enabled(self) -> bool:
+        """A vault implies a login: there is nothing secret to serve otherwise.
+
+        A configured-but-still-locked vault counts: the passphrase is entered in
+        the browser, so the dashboard is already gated before it is unlocked.
+        """
+        return self.vault is not None or self.vault_path is not None or self.auth.enabled
+
+    def unlock(self, passphrase: str) -> Vault:
+        """Decrypt the vault in memory (raises :class:`VaultError` if it is not yours).
+
+        Called by the login route: the same passphrase both signs you in and
+        decrypts the watchlist, so there is only ever one secret to remember.
+        """
+        if self.vault is not None:
+            if not self.vault.verify_passphrase(passphrase):
+                raise VaultError("wrong passphrase")
+            return self.vault
+        if self.vault_path is None:
+            raise VaultError("no vault is configured")
+        return Vault.open(self.vault_path, passphrase)
+
+    @property
+    def vault_ready(self) -> bool:
+        return self.vault is not None
+
+    def effective_trusted_origins(self) -> tuple[str, ...]:
+        return self.trusted_origins or default_trusted_origins()
 
 
 class ScanRequest(BaseModel):
@@ -105,9 +190,24 @@ class ScanRequest(BaseModel):
                 f"that would expand to {len(combos)} separate scans; the dashboard runs at "
                 f"most {_MAX_TARGETS} per request — split it up"
             )
-        return [
-            ScanTarget.create(location=self.location, **combo) for combo in combos
-        ]
+        return [ScanTarget.create(location=self.location, **combo) for combo in combos]
+
+
+class VaultEntryRequest(BaseModel):
+    """Body of ``POST /api/vault/entries``.
+
+    ``value`` carries the secret itself — a password for ``kind=password``. It is
+    used in memory, checked, and dropped; only a keyed fingerprint is persisted
+    (plus a SHA-1 verifier when ``store_hash`` is set, which is what makes
+    automatic re-checks possible).
+    """
+
+    kind: VaultKind
+    value: str = Field(min_length=1, max_length=320)
+    label: str = Field(default="", max_length=80)
+    notes: str = Field(default="", max_length=280)
+    store_hash: bool = False
+    check_now: bool = True
 
 
 @dataclass
@@ -144,10 +244,50 @@ class RunState:
         }
 
 
+@dataclass
+class BreachState:
+    """In-memory state for the watchlist checks (the "breach watch")."""
+
+    status: str = "idle"  # idle | running | done | error
+    triggered_by: str = ""
+    report: BreachReport | None = None
+    error: str | None = None
+    started_at: datetime | None = None
+    finished_at: datetime | None = None
+    task: asyncio.Task | None = None
+    events: deque[dict[str, Any]] = field(default_factory=lambda: deque(maxlen=_MAX_EVENTS))
+
+    def to_dict(self) -> dict[str, Any]:
+        payload: dict[str, Any] = {
+            "status": self.status,
+            "triggered_by": self.triggered_by,
+            "started_at": self.started_at.isoformat() if self.started_at else None,
+            "finished_at": self.finished_at.isoformat() if self.finished_at else None,
+            "error": self.error,
+            "events": list(self.events)[-8:],
+        }
+        if self.report is not None:
+            payload["report"] = self.report.to_dict()
+            payload["headline"] = self.report.headline()
+        else:
+            payload["report"] = None
+            payload["headline"] = ""
+        return payload
+
+
 def create_app(settings: AppSettings | None = None) -> FastAPI:
     settings = settings or AppSettings()
+    settings.auth.validate()
     store = ScanStore(settings.output_dir)
     runs: dict[str, RunState] = {}
+    breach = BreachState()
+    sessions = SessionManager(ttl_seconds=settings.auth.session_ttl_seconds)
+    throttle = LoginThrottle(
+        max_attempts=settings.auth.max_attempts,
+        lockout_seconds=settings.auth.lockout_seconds,
+    )
+    trusted = settings.effective_trusted_origins()
+    guard_on = settings.auth_enabled
 
     app = FastAPI(
         title="D3TA1L3R dashboard",
@@ -157,8 +297,56 @@ def create_app(settings: AppSettings | None = None) -> FastAPI:
     app.state.settings = settings
     app.state.store = store
     app.state.runs = runs
+    app.state.breach = breach
+    app.state.sessions = sessions
     app.mount("/static", StaticFiles(directory=str(_HERE / "static")), name="static")
     templates = Jinja2Templates(directory=str(_HERE / "templates"))
+
+    # -- auth plumbing ---------------------------------------------------
+    def _token(request: Request) -> str | None:
+        return request.cookies.get(settings.auth.session_cookie)
+
+    def _signed_in(request: Request) -> bool:
+        return True if not guard_on else sessions.verify(_token(request))
+
+    def require_session(request: Request) -> None:
+        """API dependency: JSON 401 instead of a redirect, so fetch() can react."""
+        if not _signed_in(request):
+            raise HTTPException(status_code=401, detail="sign in to use the dashboard")
+
+    def require_vault(request: Request) -> None:
+        """Watchlist endpoints need a vault *and* a session — the vault is decrypted data."""
+        if not _signed_in(request):
+            raise HTTPException(status_code=401, detail="sign in to use the dashboard")
+        if settings.vault is None:  # pragma: no cover - a session implies an unlock
+            raise HTTPException(status_code=404, detail="no vault is configured")
+
+    def _guard_page(request: Request) -> RedirectResponse | None:
+        if _signed_in(request):
+            return None
+        target = request.url.path or "/"
+        return RedirectResponse(f"/login?next={target}", status_code=303)
+
+    @app.middleware("http")
+    async def _origin_guard(request: Request, call_next):  # type: ignore[no-untyped-def]
+        """Refuse cross-site state changes (defence in depth behind SameSite=Lax)."""
+        if guard_on and request.method in MUTATING_METHODS and not origin_allowed(request, trusted):
+            return JSONResponse(
+                {
+                    "detail": (
+                        "cross-origin request refused. The dashboard validates the "
+                        "Origin header; if you are behind a reverse proxy, add its "
+                        "origin to D3TA1L3R_TRUSTED_ORIGINS."
+                    )
+                },
+                status_code=403,
+            )
+        response = await call_next(request)
+        response.headers.setdefault("X-Content-Type-Options", "nosniff")
+        response.headers.setdefault("Referrer-Policy", "no-referrer")
+        if guard_on:
+            response.headers.setdefault("Cache-Control", "no-store")
+        return response
 
     def _context(request: Request, **extra: Any) -> dict[str, Any]:
         return {
@@ -166,10 +354,15 @@ def create_app(settings: AppSettings | None = None) -> FastAPI:
             "version": __version__,
             "title": settings.title,
             "demo_default": settings.demo,
+            "auth_enabled": guard_on,
+            "signed_in": _signed_in(request),
+            "vault_ready": settings.vault_ready,
             **extra,
         }
 
-    def _render(request: Request, name: str, **extra: Any) -> HTMLResponse:
+    def _render(
+        request: Request, name: str, *, status_code: int | None = None, **extra: Any
+    ) -> HTMLResponse:
         """Render a template across Starlette versions.
 
         Starlette >= 0.29 wants ``TemplateResponse(request, name, context)``;
@@ -178,23 +371,199 @@ def create_app(settings: AppSettings | None = None) -> FastAPI:
         """
         context = _context(request, **extra)
         try:
-            return templates.TemplateResponse(request, name, context)
+            response = templates.TemplateResponse(request, name, context)
         except TypeError:  # pragma: no cover - Starlette < 0.29
-            return templates.TemplateResponse(name, context)
+            response = templates.TemplateResponse(name, context)
+        if status_code is not None:
+            response.status_code = status_code
+        return response
+
+    def _vault_summary() -> dict[str, Any] | None:
+        if settings.vault is None:
+            return None
+        summary = settings.vault.describe()
+        summary["list"] = [
+            {
+                "entry_id": entry.entry_id,
+                "kind": entry.kind.value,
+                "kind_label": entry.kind.label,
+                "label": entry.display,
+                "masked_value": entry.masked,
+                "added_at": entry.added_at,
+                "recheckable": entry.recheckable,
+                "last_checked": entry.last_checked,
+                "last_status": entry.last_status,
+                "last_count": entry.last_count,
+            }
+            for entry in settings.vault.watchlist()
+        ]
+        return summary
+
+    # -- breach watch ----------------------------------------------------
+    def _publish_breach(event: dict[str, Any]) -> None:
+        breach.events.append(event)
+
+    async def _execute_breach(entries: list[Any], reason: str) -> None:
+        breach.status = "running"
+        breach.triggered_by = reason
+        breach.started_at = datetime.now(timezone.utc)
+        breach.error = None
+        breach.events.clear()
+        _publish_breach(
+            {
+                "type": "breach_started",
+                "message": f"watching {len(entries)} identifier(s) ({reason})",
+                "total": len(entries),
+            }
+        )
+        try:
+            report = await run_breach_check(
+                entries,
+                scan_config=settings.base_config(),
+                breach_config=settings.breach_config,
+                on_event=_publish_breach,
+            )
+            breach.report = report
+            record_outcomes(settings.vault, report)
+            save_breach_report(report, settings.output_dir)
+            breach.status = "done"
+        except asyncio.CancelledError:  # pragma: no cover - server shutting down
+            breach.status = "error"
+            breach.error = "cancelled"
+            raise
+        except Exception as exc:
+            breach.status = "error"
+            breach.error = f"{type(exc).__name__}: {exc}"
+        finally:
+            breach.finished_at = datetime.now(timezone.utc)
+            _publish_breach({"type": "breach_finished", "status": breach.status})
+
+    def _start_breach_run(reason: str) -> bool:
+        """Kick off a watchlist check unless one is already in flight."""
+        if settings.vault is None:
+            return False
+        entries = settings.vault.watchlist()
+        if not entries:
+            breach.status = "done"
+            breach.triggered_by = reason
+            breach.report = None
+            breach.finished_at = datetime.now(timezone.utc)
+            return False
+        if breach.status == "running" and breach.task and not breach.task.done():
+            return False
+        breach.task = asyncio.create_task(_execute_breach(entries, reason))
+        return True
+
+    app.state.start_breach_run = _start_breach_run  # used by the CLI smoke path
+
+    # -- authentication routes -------------------------------------------
+    @app.get("/login", response_class=HTMLResponse)
+    async def login_page(request: Request) -> Any:
+        if not guard_on:
+            return RedirectResponse("/", status_code=303)
+        if _signed_in(request):
+            return RedirectResponse(_safe_next(request.query_params.get("next")), status_code=303)
+        return _render(
+            request,
+            "login.html",
+            error=None,
+            next_path=_safe_next(request.query_params.get("next")),
+            locked_for=0,
+            max_attempts=settings.auth.max_attempts,
+        )
+
+    @app.post("/login")
+    async def login_submit(request: Request) -> Any:
+        if not guard_on:
+            return RedirectResponse("/", status_code=303)
+        if settings.vault is None and settings.vault_path is None:
+            return RedirectResponse("/", status_code=303)
+        form = await request.form()
+        passphrase = str(form.get("passphrase") or "")
+        next_path = _safe_next(str(form.get("next") or "/"))
+        key = client_key(request)
+
+        remaining = throttle.locked_for(key)
+        if remaining > 0:
+            return _render(
+                request,
+                "login.html",
+                error=f"too many failed attempts — try again in {int(remaining) + 1}s",
+                next_path=next_path,
+                locked_for=int(remaining) + 1,
+                max_attempts=settings.auth.max_attempts,
+                status_code=429,
+            )
+
+        # The passphrase decrypts the vault. It is verified by re-deriving the
+        # scrypt key; a wrong guess costs exactly as much as a right one, and
+        # nothing is written anywhere.
+        unlocked: Vault | None = None
+        if passphrase:
+            try:
+                unlocked = settings.unlock(passphrase)
+            except D3ta1l3rError:
+                unlocked = None
+        if unlocked is None:
+            locked = throttle.record_failure(key)
+            message = "wrong passphrase"
+            if locked:
+                message = f"too many failed attempts — locked for {int(locked)}s"
+            return _render(
+                request,
+                "login.html",
+                error=message,
+                next_path=next_path,
+                locked_for=int(locked),
+                max_attempts=settings.auth.max_attempts,
+                status_code=401,
+            )
+
+        throttle.record_success(key)
+        settings.vault = unlocked  # now serve the watchlist for this process
+        token, _ttl = sessions.issue()
+        # The requested behaviour: a fresh login re-checks the watchlist.
+        _start_breach_run("login")
+        response = RedirectResponse(next_path, status_code=303)
+        set_session_cookie(response, token, settings.auth)
+        return response
+
+    @app.post("/logout")
+    async def logout(request: Request) -> Any:
+        sessions.revoke(_token(request))
+        if settings.vault is not None or settings.vault_path is not None:
+            breach.report = None
+            breach.status = "idle"
+        settings.vault = None  # re-lock: the next login decrypts again
+        response = RedirectResponse("/login", status_code=303)
+        clear_session_cookie(response, settings.auth)
+        return response
 
     # -- pages -----------------------------------------------------------
     @app.get("/", response_class=HTMLResponse)
-    async def index(request: Request) -> HTMLResponse:
+    async def index(request: Request) -> Any:
+        redirect = _guard_page(request)
+        if redirect is not None:
+            return redirect
         return _render(
             request,
             "index.html",
             scans=[meta.to_dict() for meta in store.list(limit=25)],
             categories=sorted({spec.category for spec in load_site_specs()}),
             sources_count=len([s for s in load_site_specs() if s.enabled_by_default]),
+            vault=_vault_summary(),
+            breach=breach.to_dict(),
+            breach_sources=[
+                source.describe(settings.breach_config)
+                for source in _breach_sources_for_display(settings.breach_config)
+            ],
         )
 
     @app.get("/scans/{scan_id}", response_class=HTMLResponse)
-    async def scan_page(request: Request, scan_id: str) -> HTMLResponse:
+    async def scan_page(request: Request, scan_id: str) -> Any:
+        redirect = _guard_page(request)
+        if redirect is not None:
+            return redirect
         run = runs.get(scan_id)
         if run is not None:
             return _render(request, "run.html", run=run.to_dict(), scan_id=scan_id)
@@ -210,13 +579,19 @@ def create_app(settings: AppSettings | None = None) -> FastAPI:
         )
 
     @app.get("/sources", response_class=HTMLResponse)
-    async def sources_page(request: Request) -> HTMLResponse:
+    async def sources_page(request: Request) -> Any:
+        redirect = _guard_page(request)
+        if redirect is not None:
+            return redirect
         engine = ScanEngine(settings.base_config())
         return _render(request, "sources.html", sources=engine.describe_sources())
 
     # -- api -------------------------------------------------------------
     @app.get("/api/health")
-    async def health() -> dict[str, Any]:
+    async def health(request: Request) -> dict[str, Any]:
+        """Liveness. Unauthenticated callers get the minimum useful payload."""
+        if not _signed_in(request):
+            return {"status": "ok", "version": __version__, "auth_required": True}
         config = settings.base_config()
         return {
             "status": "ok",
@@ -227,22 +602,25 @@ def create_app(settings: AppSettings | None = None) -> FastAPI:
             "concurrency": config.rate.global_concurrency,
             "timeout": config.timeout,
             "stored_scans": len(store.list()),
+            "auth_required": guard_on,
+            "vault": _vault_summary(),
+            "breach": {"status": breach.status, "triggered_by": breach.triggered_by},
         }
 
     @app.get("/api/sources")
-    async def api_sources() -> dict[str, Any]:
+    async def api_sources(_: None = Depends(require_session)) -> dict[str, Any]:
         engine = ScanEngine(settings.base_config())
         rows = engine.describe_sources()
         return {"count": len(rows), "sources": rows}
 
     @app.get("/api/scans")
-    async def api_scans() -> dict[str, Any]:
+    async def api_scans(_: None = Depends(require_session)) -> dict[str, Any]:
         stored = [meta.to_dict() for meta in store.list()]
         active = [run.to_dict() for run in runs.values()]
         return {"stored": stored, "active": active}
 
     @app.get("/api/scans/{scan_id}")
-    async def api_scan(scan_id: str) -> JSONResponse:
+    async def api_scan(scan_id: str, _: None = Depends(require_session)) -> JSONResponse:
         run = runs.get(scan_id)
         if run is not None:
             return JSONResponse(run.to_dict())
@@ -252,7 +630,9 @@ def create_app(settings: AppSettings | None = None) -> FastAPI:
         return JSONResponse(report.to_dict())
 
     @app.post("/api/scans")
-    async def api_start_scan(payload: ScanRequest) -> JSONResponse:
+    async def api_start_scan(
+        payload: ScanRequest, _: None = Depends(require_session)
+    ) -> JSONResponse:
         try:
             targets = payload.targets()
         except UsageError as exc:
@@ -268,6 +648,8 @@ def create_app(settings: AppSettings | None = None) -> FastAPI:
 
     @app.get("/api/scans/{scan_id}/events")
     async def api_events(scan_id: str, request: Request) -> StreamingResponse:
+        if not _signed_in(request):
+            raise HTTPException(status_code=401, detail="sign in to use the dashboard")
         run = runs.get(scan_id)
         if run is None:
             raise HTTPException(status_code=404, detail=f"no live run named {scan_id}")
@@ -306,7 +688,9 @@ def create_app(settings: AppSettings | None = None) -> FastAPI:
         )
 
     @app.get("/api/scans/{scan_id}/report.{suffix}")
-    async def api_report(scan_id: str, suffix: str) -> Any:
+    async def api_report(
+        scan_id: str, suffix: str, _: None = Depends(require_session)
+    ) -> Any:
         report = store.load(scan_id) or _run_report(runs.get(scan_id))
         if report is None:
             raise HTTPException(status_code=404, detail=f"no such scan: {scan_id}")
@@ -319,7 +703,9 @@ def create_app(settings: AppSettings | None = None) -> FastAPI:
         raise HTTPException(status_code=400, detail="suffix must be json, md or html")
 
     @app.delete("/api/scans/{scan_id}")
-    async def api_delete_scan(scan_id: str) -> dict[str, Any]:
+    async def api_delete_scan(
+        scan_id: str, _: None = Depends(require_session)
+    ) -> dict[str, Any]:
         run = runs.pop(scan_id, None)
         if run and run.task and not run.task.done():
             run.task.cancel()
@@ -329,7 +715,9 @@ def create_app(settings: AppSettings | None = None) -> FastAPI:
         return {"deleted_files": removed, "scan_id": scan_id}
 
     @app.post("/api/calibrate")
-    async def api_calibrate(payload: dict[str, Any] | None = None) -> dict[str, Any]:
+    async def api_calibrate(
+        payload: dict[str, Any] | None = None, _: None = Depends(require_session)
+    ) -> dict[str, Any]:
         """Run the bogus-handle false-positive check on the HTML probes."""
         from ..cli import _calibration_row  # reuse the CLI's verdict logic
 
@@ -342,8 +730,15 @@ def create_app(settings: AppSettings | None = None) -> FastAPI:
         from ..sources.probe import UsernameProbeSource
 
         engine = ScanEngine(settings.base_config(), sources=[UsernameProbeSource(s) for s in specs])
-        results = {spec.id: {"id": spec.id, "name": spec.name, "absent_probes": [],
-                             "present_probe": None} for spec in specs}
+        results = {
+            spec.id: {
+                "id": spec.id,
+                "name": spec.name,
+                "absent_probes": [],
+                "present_probe": None,
+            }
+            for spec in specs
+        }
         for _ in range(max(1, samples)):
             bogus = "zzq" + _random_token(12)
             report = await engine.scan(ScanTarget.create(username=bogus))
@@ -356,7 +751,9 @@ def create_app(settings: AppSettings | None = None) -> FastAPI:
                         "handle": bogus,
                         "status": outcome.status.value,
                         "http_status": outcome.http_status,
-                        "evidence": outcome.findings[0].evidence if outcome.findings else outcome.error,
+                        "evidence": (
+                            outcome.findings[0].evidence if outcome.findings else outcome.error
+                        ),
                     }
                 )
         rows = [_calibration_row(entry) for entry in results.values()]
@@ -365,6 +762,109 @@ def create_app(settings: AppSettings | None = None) -> FastAPI:
             "sites": rows,
             "false_positive_sites": [r["id"] for r in rows if r["counts"]["false_positive"]],
         }
+
+    # -- watchlist (vault) -----------------------------------------------
+    @app.get("/api/vault")
+    async def api_vault(_: None = Depends(require_vault)) -> dict[str, Any]:
+        assert settings.vault is not None
+        return _vault_summary() or {}
+
+    @app.post("/api/vault/entries")
+    async def api_vault_add(
+        payload: VaultEntryRequest, _: None = Depends(require_vault)
+    ) -> JSONResponse:
+        assert settings.vault is not None
+        try:
+            entry, created = settings.vault.add(
+                payload.kind,
+                payload.value,
+                label=payload.label,
+                notes=payload.notes,
+                store_hash=payload.store_hash,
+            )
+        except (UsageError, D3ta1l3rError) as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        settings.vault.save()
+
+        result: dict[str, Any] = {
+            "created": created,
+            "entry": {
+                "entry_id": entry.entry_id,
+                "kind": entry.kind.value,
+                "label": entry.display,
+                "masked_value": entry.masked,
+                "recheckable": entry.recheckable,
+            },
+            "check": None,
+        }
+        if payload.check_now:
+            if payload.kind is VaultKind.PASSWORD:
+                # The password is right here in memory: check it now, and keep
+                # nothing but the count unless the caller asked for a verifier.
+                result["check"] = await _check_password_now(payload.value, entry)
+            else:
+                result["check"] = await _check_entry_now(entry)
+        return JSONResponse(result, status_code=201 if created else 200)
+
+    @app.delete("/api/vault/entries/{entry_id}")
+    async def api_vault_delete(
+        entry_id: str, _: None = Depends(require_vault)
+    ) -> dict[str, Any]:
+        assert settings.vault is not None
+        removed = settings.vault.remove(entry_id)
+        if not removed:
+            raise HTTPException(status_code=404, detail=f"no such entry: {entry_id}")
+        settings.vault.save()
+        return {"removed": entry_id, "entries": len(settings.vault)}
+
+    async def _check_password_now(password: str, entry: Any) -> dict[str, Any]:
+        """Check a password the moment it is typed, using k-anonymity.
+
+        The plaintext lives only for the duration of this call. What is retained
+        is the outcome — and, only when the entry was added with ``store_hash``,
+        the verifier on the stored entry itself.
+        """
+        probe = transient_password_entry(
+            password, label=entry.display, entry_id=entry.entry_id
+        )
+        report = await _single_entry_check(probe)
+        if report.checks:
+            record_outcomes(settings.vault, report)
+        return report.to_dict()
+
+    async def _check_entry_now(entry: Any) -> dict[str, Any]:
+        """Immediate feedback after adding an identifier."""
+        report = await _single_entry_check(entry)
+        if report.checks:
+            record_outcomes(settings.vault, report)
+        return report.to_dict()
+
+    async def _single_entry_check(entry: Any) -> BreachReport:
+        try:
+            return await run_breach_check(
+                [entry],
+                scan_config=settings.base_config(),
+                breach_config=settings.breach_config,
+            )
+        except D3ta1l3rError as exc:  # pragma: no cover - surfaced as a gap
+            report = BreachReport(entries=[entry])
+            report.finished_at = datetime.now(timezone.utc)
+            report.unavailable = [
+                {"source_id": "internal", "source_name": "breach check", "reason": str(exc)}
+            ]
+            return report
+
+    # -- breach watch ----------------------------------------------------
+    @app.get("/api/breach")
+    async def api_breach(_: None = Depends(require_vault)) -> dict[str, Any]:
+        return breach.to_dict()
+
+    @app.post("/api/breach/check")
+    async def api_breach_check(_: None = Depends(require_vault)) -> dict[str, Any]:
+        started = _start_breach_run("manual")
+        return JSONResponse(
+            {"started": started, "status": breach.status}, status_code=202 if started else 200
+        )
 
     return app
 
@@ -388,8 +888,10 @@ def _scan_config(settings: AppSettings, payload: ScanRequest) -> ScanConfig:
     return base.replaced(
         rate=rate,
         demo=settings.demo if payload.demo is None else bool(payload.demo),
-        respect_robots=base.respect_robots if payload.respect_robots is None
-        else bool(payload.respect_robots),
+        respect_robots=(
+            base.respect_robots if payload.respect_robots is None
+            else bool(payload.respect_robots)
+        ),
         enabled_sources=frozenset(payload.sources or ()),
         disabled_sources=frozenset(payload.exclude_sources or ()),
         categories=frozenset(payload.categories or ()),
@@ -404,6 +906,19 @@ def _cache_dir(output_dir: Path) -> Path:
     path = Path(output_dir) / ".cache"
     path.mkdir(parents=True, exist_ok=True)
     return path
+
+
+def _breach_sources_for_display(config: BreachConfig) -> list[Any]:
+    from ..breach import build_breach_sources
+
+    return build_breach_sources(config)
+
+
+def _safe_next(value: str | None) -> str:
+    """Only ever redirect to a path on this host (no open redirects)."""
+    if not value or not value.startswith(_SAFE_NEXT_PREFIX) or value.startswith("//"):
+        return "/"
+    return value
 
 
 async def _execute_run(run: RunState, config: ScanConfig, store: ScanStore) -> None:
@@ -494,3 +1009,15 @@ def _random_token(length: int) -> str:
 
     return secrets.token_hex(length)[:length]
 
+
+# Re-exported for tests and for `d3ta1l3r web` wiring.
+__all__ = [
+    "AppSettings",
+    "BreachState",
+    "RunState",
+    "ScanRequest",
+    "Vault",
+    "VaultEntryRequest",
+    "VaultError",
+    "create_app",
+]

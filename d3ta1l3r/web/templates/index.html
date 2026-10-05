@@ -97,9 +97,11 @@
     </ul>
     <h3>What it will never do</h3>
     <ul class="clean muted">
-      <li>No people-search brokers, data brokers or breach corpora.</li>
+      <li>No people-search brokers or reverse-lookup services.</li>
+      <li>No downloading, scraping or bundling of leaked databases — a local corpus is
+        something <em>you</em> supply.</li>
       <li>No login walls, CAPTCHAs or anti-bot controls circumvented.</li>
-      <li>No phone numbers, addresses or relatives — out of scope by design.</li>
+      <li>No phone reverse lookups, addresses or relatives — out of scope by design.</li>
       <li>No queries about anyone but the identifiers you supply.</li>
     </ul>
     <h3>Confidence</h3>
@@ -111,6 +113,112 @@
     </p>
   </div>
 </section>
+
+{% if vault_ready %}
+<section id="watchlist">
+  <h2>Breach watch</h2>
+  <div class="grid">
+    <div class="panel">
+      <h3>Last check</h3>
+      <div id="breach-status" data-status="{{ breach.status }}"
+           data-triggered="{{ breach.triggered_by }}">
+        {% if breach.status == "idle" %}
+        <p class="muted">No check has run yet. It runs automatically the moment you sign in.</p>
+        {% else %}
+        <p>
+          <span class="badge {{ 'low' if breach.status != 'done' else 'confirmed' }}">{{ breach.status }}</span>
+          {% if breach.triggered_by %}<span class="muted">triggered by {{ breach.triggered_by }}</span>{% endif %}
+        </p>
+        {% if breach.headline %}<p><b>{{ breach.headline }}</b></p>{% endif %}
+        {% if breach.error %}<p class="warn-text">{{ breach.error }}</p>{% endif %}
+        {% endif %}
+      </div>
+      <div class="actions">
+        <button id="breach-run" type="button">Check now</button>
+        <span class="status" id="breach-run-status"></span>
+      </div>
+      <p class="fineprint">
+        Password checks send five characters of a SHA-1 hash. Email checks (only with an
+        HIBP key configured) send the address itself. Local corpus checks send nothing.
+        A source that cannot answer is reported as a <b>gap</b>, never as a clean result.
+      </p>
+    </div>
+
+    <div class="panel">
+      <h3>Identifiers watched</h3>
+      {% if vault and vault.list %}
+      <table class="scans">
+        <thead><tr><th>What</th><th>Value</th><th>Last check</th><th></th></tr></thead>
+        <tbody>
+          {% for entry in vault.list %}
+          <tr>
+            <td>{{ entry.kind_label }}{% if entry.label and entry.label != entry.masked_value %}
+              <span class="hint">{{ entry.label }}</span>{% endif %}</td>
+            <td class="mono">{{ entry.masked_value }}</td>
+            <td>
+              {% if entry.last_status %}
+              <span class="badge {{ 'medium' if entry.last_status == 'pwned' else ('confirmed' if entry.last_status == 'clean' else 'low') }}">{{ entry.last_status }}</span>
+              {% if entry.last_count and entry.last_count > 0 %}<span class="hint">{{ entry.last_count }} record(s)</span>{% endif %}
+              {% else %}<span class="muted">never</span>{% endif %}
+            </td>
+            <td class="row-actions">
+              <button class="link danger" data-vault-delete="{{ entry.entry_id }}">remove</button>
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+      {% else %}
+      <p class="muted">Nothing watched yet. Add your own email, phone number or handle below.</p>
+      {% endif %}
+
+      <h3>Add an identifier</h3>
+      <form id="vault-form" autocomplete="off">
+        <div class="fields">
+          <label>Kind
+            <select name="kind">
+              <option value="email">email address</option>
+              <option value="phone">phone number</option>
+              <option value="username">handle / username</option>
+              <option value="domain">domain</option>
+              <option value="password">password</option>
+            </select>
+          </label>
+          <label>Value <span class="hint">(never stored for passwords)</span>
+            <input type="password" name="value" autocomplete="new-password" spellcheck="false"
+                   placeholder="you@example.com">
+          </label>
+          <label>Label <span class="hint">(optional, for your own reference)</span>
+            <input type="text" name="label" placeholder="work email" maxlength="80">
+          </label>
+        </div>
+        <label class="check">
+          <input type="checkbox" name="store_hash">
+          Keep a SHA-1 verifier so this password can be re-checked automatically at login
+          <span class="hint">(off: checked once now, nothing retained)</span>
+        </label>
+        <div class="actions">
+          <button type="submit">Add to watchlist</button>
+          <span class="status" id="vault-status"></span>
+        </div>
+      </form>
+      <div id="vault-check-result"></div>
+    </div>
+  </div>
+
+  <h3>Breach sources</h3>
+  <ul class="clean">
+    {% for source in breach_sources %}
+    <li>
+      <b>{{ source.name }}</b>
+      — {{ source.description }}
+      {% if not source.available %}<span class="warn-text">· unavailable: {{ source.unavailable_reason }}</span>
+      {% else %}<span class="hint">· sends {{ source.sends_data }}</span>{% endif %}
+    </li>
+    {% endfor %}
+  </ul>
+</section>
+{% endif %}
 
 <section>
   <h2>Stored scans</h2>

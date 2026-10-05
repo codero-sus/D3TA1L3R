@@ -15,10 +15,18 @@
     </a>
     <nav>
       <a href="/">Dashboard</a>
+      <a href="/#watchlist">Watchlist</a>
       <a href="/sources">Coverage</a>
       <a href="/docs" title="OpenAPI docs">API</a>
     </nav>
-    <span class="version">v{{ version }}</span>
+    <span class="version">
+      {% if auth_enabled and signed_in %}
+      <form method="post" action="/logout" class="inline-form">
+        <button class="link" type="submit">sign out</button>
+      </form>
+      {% endif %}
+      v{{ version }}
+    </span>
   </header>
 
   {% if demo_default %}
@@ -38,7 +46,13 @@
     <p>
       D3TA1L3R audits <b>your own</b> public footprint. It queries only public,
       unauthenticated endpoints, obeys robots.txt, and reports sites it could not check as
-      gaps rather than guessing. Scan files contain personal data — delete them when you are done.
+      gaps rather than guessing. Scan files and breach reports contain personal data —
+      delete them when you are done.
+    </p>
+    <p>
+      Password checks use k-anonymity: five characters of a SHA-1 hash leave this machine,
+      never the password. Breach data is never downloaded or bundled —
+      <a href="/docs">see <code>docs/SCOPE.md</code></a>.
     </p>
     <p><a href="/docs">OpenAPI</a> · <code>d3ta1l3r scan --help</code> for the CLI</p>
   </footer>

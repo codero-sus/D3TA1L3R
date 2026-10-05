@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
+import hashlib
+import io
 import json
 from pathlib import Path
 
 import pytest
 
 from d3ta1l3r.cli import (
+    EXIT_FAILURE,
     EXIT_NEW_FINDINGS,
     EXIT_OK,
     EXIT_USAGE,
@@ -38,7 +41,7 @@ class TestParser:
         assert parser.prog == "d3ta1l3r"
         subparsers = [action for action in parser._actions if action.dest == "command"]
         assert subparsers and set(subparsers[0].choices) == {
-            "scan", "sources", "calibrate", "diff", "web"
+            "scan", "sources", "calibrate", "diff", "vault", "breach", "web"
         }
 
 
@@ -215,6 +218,244 @@ class TestReportWriter:
 
     def test_unknown_format_writes_nothing_but_does_not_crash(self, tmp_path) -> None:
         assert _write_reports(_fake_report("alice", 1), tmp_path, "pdf") == []
+
+
+class TestVaultCommand:
+    """The vault CLI: the passphrase never comes from argv, results stay masked."""
+
+    @pytest.fixture(autouse=True)
+    def _passphrase(self, monkeypatch, tmp_path):
+        # Non-interactive: the documented environment variable, not a terminal.
+        monkeypatch.setenv("D3TA1L3R_VAULT_PASSPHRASE", "correct horse battery staple")
+        monkeypatch.setenv("D3TA1L3R_VAULT", str(tmp_path / "watchlist.vault"))
+        return "correct horse battery staple"
+
+    def test_init_creates_a_locked_down_vault(self, tmp_path, capsys) -> None:
+        assert main(["vault", "init"]) == EXIT_OK
+        output = capsys.readouterr().out
+        assert "created" in output
+        assert "0o600" in output
+        assert (tmp_path / "watchlist.vault").is_file()
+
+    def test_init_refuses_to_clobber_and_can_be_forced(self, tmp_path, capsys) -> None:
+        main(["vault", "init"])
+        capsys.readouterr()
+        assert main(["vault", "init"]) == EXIT_FAILURE
+        assert "already exists" in capsys.readouterr().err
+        assert main(["vault", "init", "--force"]) == EXIT_OK
+
+    def test_where_needs_no_passphrase(self, tmp_path, monkeypatch, capsys) -> None:
+        main(["vault", "init"])
+        capsys.readouterr()
+        monkeypatch.delenv("D3TA1L3R_VAULT_PASSPHRASE", raising=False)
+        assert main(["vault", "where"]) == EXIT_OK
+        assert "0o600" in capsys.readouterr().out
+
+    def test_where_reports_a_missing_vault_without_failing(self, tmp_path, capsys) -> None:
+        assert main(["vault", "where"]) == EXIT_OK
+        assert "not created yet" in capsys.readouterr().out
+
+    def test_add_list_and_unlock_keep_values_masked(self, tmp_path, capsys) -> None:
+        main(["vault", "init"])
+        assert main(["vault", "add", "--kind", "email", "alice@example.com", "--no-check"]) == EXIT_OK
+        capsys.readouterr()
+        assert main(["vault", "list"]) == EXIT_OK
+        listed = capsys.readouterr().out
+        assert "al***@example.com" in listed
+        assert "alice@example.com" not in listed
+        assert main(["vault", "unlock"]) == EXIT_OK
+        assert "entries: 1" in capsys.readouterr().out
+
+    def test_list_json_is_masked(self, tmp_path, capsys) -> None:
+        main(["vault", "init"])
+        main(["vault", "add", "--kind", "email", "alice@example.com", "--no-check"])
+        capsys.readouterr()
+        main(["vault", "list", "--json"])
+        payload = json.loads(capsys.readouterr().out)
+        assert payload["entries"][0]["masked_value"] == "al***@example.com"
+        assert "alice@example.com" not in json.dumps(payload)
+
+    def test_adding_the_same_value_twice_says_so(self, tmp_path, capsys) -> None:
+        main(["vault", "init"])
+        main(["vault", "add", "--kind", "username", "alice", "--no-check"])
+        capsys.readouterr()
+        main(["vault", "add", "--kind", "username", "alice", "--no-check"])
+        assert "already watched" in capsys.readouterr().out
+
+    def test_a_password_is_prompted_for_and_checked_from_stdin(
+        self, tmp_path, monkeypatch, capsys
+    ) -> None:
+        main(["vault", "init"])
+        capsys.readouterr()
+        monkeypatch.setattr("sys.stdin", io.StringIO("hunter2\n"))
+        code = main(["vault", "add", "--kind", "password", "--store-hash", "--demo"])
+        assert code == EXIT_NEW_FINDINGS  # found in the demo corpus
+        output = capsys.readouterr().out
+        assert "hunter2" not in output
+        assert "••••••••" in output
+
+    def test_a_password_is_never_written_to_the_vault(self, tmp_path, monkeypatch, capsys) -> None:
+        main(["vault", "init"])
+        monkeypatch.setattr("sys.stdin", io.StringIO("hunter2\n"))
+        main(["vault", "add", "--kind", "password", "--store-hash", "--demo"])
+        raw = (tmp_path / "watchlist.vault").read_text(encoding="utf-8")
+        assert "hunter2" not in raw
+        assert hashlib.sha1(b"hunter2").hexdigest() not in raw
+
+    def test_remove_asks_unless_told_not_to(self, tmp_path, monkeypatch, capsys) -> None:
+        main(["vault", "init"])
+        main(["vault", "add", "--kind", "username", "alice", "--no-check"])
+        entry_id = json.loads(
+            _capture(lambda: main(["vault", "list", "--json"]))
+        )["entries"][0]["entry_id"]
+        capsys.readouterr()
+        monkeypatch.setattr("builtins.input", lambda _prompt="": "n")
+        assert main(["vault", "remove", entry_id]) == EXIT_OK
+        assert "left it alone" in capsys.readouterr().out
+        assert main(["vault", "remove", entry_id, "--yes"]) == EXIT_OK
+
+    def test_removing_something_that_is_not_there_is_a_usage_error(self, tmp_path, capsys) -> None:
+        main(["vault", "init"])
+        capsys.readouterr()
+        assert main(["vault", "remove", "nope", "--yes"]) == EXIT_USAGE
+        assert "no entry" in capsys.readouterr().err
+
+    def test_rotate_changes_the_passphrase(self, tmp_path, monkeypatch, capsys) -> None:
+        main(["vault", "init"])
+        capsys.readouterr()
+        new_secret = tmp_path / "new-passphrase.txt"
+        new_secret.write_text("a second long passphrase\n", encoding="utf-8")
+        assert main(["vault", "rotate", "--new-passphrase-file", str(new_secret)]) == EXIT_OK
+        assert "re-encrypted" in capsys.readouterr().out
+        monkeypatch.setenv("D3TA1L3R_VAULT_PASSPHRASE", "correct horse battery staple")
+        assert main(["vault", "unlock"]) == EXIT_FAILURE  # the old one no longer works
+        monkeypatch.setenv("D3TA1L3R_VAULT_PASSPHRASE", "a second long passphrase")
+        assert main(["vault", "unlock"]) == EXIT_OK
+
+    def test_init_can_be_seeded_from_a_stored_scan(self, tmp_path, capsys) -> None:
+        scans = tmp_path / "scans"
+        main(["scan", "-u", "demo_user", "-e", "demo.user@example.com", "--demo",
+              "-o", str(scans), "--stdout", "none", "-q"])
+        report = next(scans.glob("*.json"))
+        assert main(["vault", "init", "--from-scan", str(report)]) == EXIT_OK
+        assert "seeded 2 identifier(s)" in capsys.readouterr().out
+
+    def test_a_bad_seed_report_leaves_no_vault_behind(self, tmp_path, capsys) -> None:
+        junk = tmp_path / "not-a-report.json"
+        junk.write_text("{}", encoding="utf-8")
+        assert main(["vault", "init", "--from-scan", str(junk)]) == EXIT_USAGE
+        assert not (tmp_path / "watchlist.vault").exists()
+
+
+class TestBreachCommand:
+    @pytest.fixture(autouse=True)
+    def _vault(self, monkeypatch, tmp_path):
+        monkeypatch.setenv("D3TA1L3R_VAULT_PASSPHRASE", "correct horse battery staple")
+        monkeypatch.setenv("D3TA1L3R_VAULT", str(tmp_path / "watchlist.vault"))
+        main(["vault", "init"])
+        return tmp_path / "watchlist.vault"
+
+    def test_sources_lists_what_is_usable(self, capsys) -> None:
+        assert main(["breach", "sources"]) == EXIT_OK
+        output = capsys.readouterr().out
+        assert "pwned_passwords" in output
+        assert "unavailable" in output  # no HIBP key in the test environment
+
+    def test_sources_json_is_machine_readable(self, capsys) -> None:
+        main(["breach", "sources", "--json"])
+        rows = json.loads(capsys.readouterr().out)
+        ids = [row["id"] for row in rows]
+        assert ids[0] == "pwned_passwords"
+        assert all("sends_data" in row for row in rows)
+
+    def test_check_finds_a_breached_password_in_demo_mode(self, capsys) -> None:
+        import d3ta1l3r.cli as cli_module
+
+        original = cli_module.prompt_password
+        cli_module.prompt_password = lambda what="": "hunter2"
+        try:
+            code = main(["breach", "check", "--kind", "password", "--demo"])
+        finally:
+            cli_module.prompt_password = original
+        assert code == EXIT_NEW_FINDINGS
+        assert "found in breach data" in capsys.readouterr().out
+
+    def test_check_infers_the_kind_from_the_value(self, capsys) -> None:
+        assert main(["breach", "check", "alice@example.com", "--demo"]) == EXIT_NEW_FINDINGS
+        assert "pwned" in capsys.readouterr().out
+
+    def test_check_does_not_need_a_vault(self, monkeypatch, capsys) -> None:
+        monkeypatch.delenv("D3TA1L3R_VAULT", raising=False)
+        monkeypatch.delenv("D3TA1L3R_VAULT_PASSPHRASE", raising=False)
+        assert main(["breach", "check", "quiet@example.com", "--demo"]) == EXIT_OK
+        assert "not found" in capsys.readouterr().out
+
+    def test_run_on_an_empty_watchlist_explains_itself(self, capsys) -> None:
+        assert main(["breach", "run", "--demo"]) == EXIT_OK
+        assert "watchlist is empty" in capsys.readouterr().out
+
+    def test_run_records_outcomes_in_the_vault(self, capsys) -> None:
+        main(["vault", "add", "--kind", "password", "hunter2x", "--demo", "--store-hash"])
+        main(["vault", "add", "--kind", "email", "alice@example.com", "--demo"])
+        capsys.readouterr()
+        assert main(["breach", "run", "--demo", "-q"]) == EXIT_NEW_FINDINGS
+        main(["vault", "list"])
+        listed = capsys.readouterr().out
+        assert "last: pwned" in listed
+
+    def test_run_writes_a_report_when_asked(self, tmp_path, capsys) -> None:
+        main(["vault", "add", "--kind", "email", "alice@example.com", "--demo"])
+        out = tmp_path / "scans"
+        main(["breach", "run", "--demo", "-o", str(out), "-q"])
+        saved = list((out / "breach").glob("*.json"))
+        assert saved and (out / "breach" / "latest.json").is_file()
+        payload = json.loads(saved[0].read_text(encoding="utf-8"))
+        assert payload["schema"] == "d3ta1l3r/breach/1"
+        assert "alice@example.com" not in saved[0].read_text(encoding="utf-8")
+
+    def test_run_json_output_is_masked(self, capsys) -> None:
+        main(["vault", "add", "--kind", "email", "alice@example.com", "--demo"])
+        capsys.readouterr()
+        main(["breach", "run", "--demo", "--json"])
+        payload = json.loads(capsys.readouterr().out)
+        assert payload["entry_counts"]["pwned"] == 1
+        assert "alice@example.com" not in json.dumps(payload)
+
+    def test_a_missing_corpus_is_a_usage_error(self, capsys) -> None:
+        assert main(["breach", "run", "--demo", "--corpus", "/nope/missing.txt"]) == EXIT_USAGE
+        assert "corpus file not found" in capsys.readouterr().err
+
+    def test_corpus_hash_writes_hashes_not_values(self, tmp_path, capsys) -> None:
+        source = tmp_path / "plain.txt"
+        source.write_text("hunter2\nalice@example.com\n", encoding="utf-8")
+        out = tmp_path / "corpus"
+        assert main(["breach", "corpus-hash", str(source), "--algorithm", "sha1",
+                     "-o", str(out)]) == EXIT_OK
+        written = out / "plain-sha1.txt"
+        body = written.read_text(encoding="utf-8")
+        assert "hunter2" not in body
+        assert body.startswith("sha1:")
+
+    def test_a_local_corpus_reports_a_match_without_the_network(
+        self, tmp_path, capsys
+    ) -> None:
+        corpus = tmp_path / "corpus.txt"
+        corpus.write_text(f"sha1:{hashlib.sha1(b'hunter2').hexdigest()}\n", encoding="utf-8")
+        main(["vault", "add", "--kind", "password", "hunter2", "--store-hash", "--no-check"])
+        capsys.readouterr()
+        assert main(["breach", "run", "--corpus", str(corpus), "-q"]) == EXIT_NEW_FINDINGS
+        assert "in breach data" in capsys.readouterr().out
+
+
+def _capture(call) -> str:
+    """Run ``call`` and return what it printed (used for --json output)."""
+    import contextlib
+    import io as _io
+
+    buffer = _io.StringIO()
+    with contextlib.redirect_stdout(buffer):
+        call()
+    return buffer.getvalue()
 
 
 def _fake_report(username: str, findings: int) -> ScanReport:

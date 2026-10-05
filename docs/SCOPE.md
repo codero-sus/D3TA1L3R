@@ -18,8 +18,18 @@ domain you own — D3TA1L3R:
    heuristics, lists what it could not check, and can be diffed against a
    previous scan.
 
+It also keeps an **encrypted watchlist** of your own identifiers and re-checks it
+against **breach sources** on demand and at every dashboard login:
+
+4. Holds your emails, phone numbers, handles, domains and (optionally) password
+   verifiers in a local file encrypted with scrypt + Fernet, mode `0600`, opened
+   with a passphrase that is never written anywhere.
+5. Checks that watchlist against breach sources — see §2 for exactly which, and
+   what leaves the machine in each case.
+
 That's the entire feature set. There is no "expand" mode, no person enumeration,
-no correlation across people.
+no correlation across people, and no way to point the watchlist at somebody
+else's identifiers without lying to yourself about what you are doing.
 
 ## 2. What it refuses to do
 
@@ -28,7 +38,7 @@ These are hard limits, enforced by omission and by guards in code:
 | Refused | Where it is enforced |
 | --- | --- |
 | People-search brokers, data brokers, background-check services | No such source exists; `docs/SOURCES.md` explains why adding one is out of scope |
-| Breach corpora, credential dumps, paste-site lookups | Same; `Have I Been Pwned`-style checks are deliberately absent even though they need only an email address |
+| Breach corpora, credential dumps, paste-site lookups | D3TA1L3R never downloads, mirrors, scrapes or bundles one. There is no corpus in the repository, no "search the dumps" feature, and no aggregator endpoint anywhere in the code. Leak *checking* (§2a) only ever asks a service about your own identifier, or matches against a file you already have |
 | Phone number, home address, relatives, "who lives at" lookups | Not implemented; `validate_username` also rejects the query shapes they would need |
 | Scraping behind a login, CAPTCHA solving, IP rotation, UA spoofing to evade blocks | `core/http.py` sends one honest User-Agent and treats 401/403 as `blocked`; sites that fight automation ship `enabled_by_default: false` |
 | Querying identifiers other than the ones supplied | Sources read `ScanTarget.identifiers` and nothing else; there is no pivot/enumeration step |
@@ -37,6 +47,44 @@ These are hard limits, enforced by omission and by guards in code:
 
 If you need something on the left-hand side of that table, D3TA1L3R is the wrong
 tool, and for a third party's identifiers it is also the wrong *act*.
+
+## 2a. Leak checking, and exactly what it costs in exposure
+
+This is the one place where the tool talks about breaches, so the mechanism is
+spelled out rather than implied. Passwords are checked with **k-anonymity**:
+the password is hashed locally with SHA-1, only the first five hexadecimal
+characters travel to the range API, and the full-hash comparison happens on this
+machine. That is the same construction HIBP publishes for "Pwned Passwords", and
+the test suite asserts that the request the transport actually saw carries
+nothing but that five-character prefix.
+
+There are three breach sources, and each one is bounded by what it sends:
+
+| Source | What you need | What leaves the machine | What you get |
+| --- | --- | --- | --- |
+| `pwned_passwords` | nothing | **five hexadecimal characters of `SHA-1(password)`** — never the password, never the full hash | `pwned` with a count, or `clean` |
+| `hibp_breaches` | your own HIBP API key (`D3TA1L3R_HIBP_KEY`) | the email address itself, plus the key | `pwned` with the breach names, or `clean` |
+| `local_corpus` | a file *you* supply | nothing at all | `pwned`/`clean` per match in your file |
+
+Consequences that were designed in, not discovered later:
+
+- **Passwords are never stored.** `d3ta1l3r vault add --kind password` keeps the
+  length and the outcome. It keeps a SHA-1 verifier *only* with `--store-hash`,
+  which is what allows the automatic re-check at login; without it the password
+  is checked once and forgotten. A verifier is a real secret: it is stored inside
+  the encrypted payload and anyone who learns your vault passphrase can test
+  those hashes offline, so leave `--store-hash` off unless you want the watch.
+- **No accounts are enumerated.** Every check takes one of *your* identifiers.
+  There is no "which of my emails is in this dump" fan-out and no address list to
+  walk.
+- **A check that did not happen is a gap.** A missing HIBP key, an HTTP 429, an
+  unreachable corpus file, a password stored without a verifier: each one is
+  reported as `unknown`/`unsupported` with a reason. Only `pwned` and `clean` are
+  answers, and `clean` is only ever produced by a source that actually answered.
+  `d3ta1l3r breach run` exits `3` when something was found, `2` when nothing
+  could be checked at all.
+- **No consolidation.** Results are never merged into a "risk score", never sent
+  anywhere, and never enriched with data from another source.
 
 ## 3. Why the limits are where they are
 
@@ -69,8 +117,18 @@ tool, and for a third party's identifiers it is also the wrong *act*.
 - **Network**: requests go directly from your machine to the target site. There
   is no telemetry, no analytics, no update check, and no central service. The
   tool has no server component.
-- **Credentials**: none. D3TA1L3R never asks for a username/password/token for
-  any third-party service, and has no code path that could use one.
+- **Credentials**: none, for any third party. D3TA1L3R never asks for a
+  username/password/token for any site it scans, and has no code path that could
+  use one. The single secret it handles is the passphrase to your own vault.
+- **Vault** (`vault/watchlist.vault`, or `$D3TA1L3R_VAULT`): one file, mode
+  `0600`, written atomically, containing your identifiers under scrypt
+  (n=2^15, r=8) + Fernet and a per-vault fingerprint key. The passphrase is read
+  from the terminal, `D3TA1L3R_VAULT_PASSPHRASE` or `--passphrase-file` — never
+  from `argv`, where it would land in shell history and `ps`. A wrong passphrase
+  or a modified byte fails closed with "nothing was decrypted". There is no
+  recovery path and no escrow: lose the passphrase and the file is gone.
+- **Breach reports** (`scans/breach/*.json`, `latest.json`): counts, statuses and
+  masked values only — the same personal-data rules as scan reports apply.
 
 ## 5. Threat model
 
@@ -97,6 +155,16 @@ What D3TA1L3R defends against:
   outcome with a message. There is a test that runs a source which raises
   `RuntimeError` and asserts the rest of the scan completes.
 
+- **Somebody reading the vault file.** It is `0600` and encrypted; the KDF cost
+  makes online guessing against a 12-character-minimum passphrase useless, and
+  login attempts against the dashboard are throttled (5 tries, then a 300 s
+  lockout per address). What it does not defend against is a weak passphrase you
+  reuse elsewhere, or malware running as you while the vault is unlocked.
+- **A hostile page in your browser driving the dashboard.** The session cookie is
+  `HttpOnly` + `SameSite=Lax`, mutating requests are checked against an origin
+  allowlist, and the session key is per process, so a restart invalidates every
+  session.
+
 What it does **not** defend against (out of scope): a compromised local machine,
 a hostile local network capturing traffic (use a trusted network; there is no
 proxy/tunnel feature), and misidentification by *other* tools that scan you.
@@ -120,6 +188,10 @@ After a scan:
 - [ ] I have decided what to do about each real finding (delete the account,
       tighten privacy settings, or accept it).
 - [ ] I have deleted the reports and cache when I no longer need them.
+- [ ] If I use a vault: I know where the file is (`d3ta1l3r vault where`), it is
+      `0600`, and I have decided whether to back it up (there is no recovery).
+- [ ] I have read what each breach source sends — and I am not treating a gap as
+      good news.
 
 ## 7. Reporting a problem
 
