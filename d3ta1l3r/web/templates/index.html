@@ -220,6 +220,37 @@
 </section>
 {% endif %}
 
+<section id="ask">
+  <h2>Ask about your own scans</h2>
+  <div class="panel">
+    <p class="fineprint">
+      Answers come from a model running <b>on this machine</b> — a GGUF file loaded with
+      llama-cpp-python, an Ollama daemon on loopback, or (with neither installed) plain
+      retrieval over the report. Nothing about your footprint is sent to a company to be
+      summarised, the conversation is never written to disk, and every answer cites the
+      context ids it used. Ids it invented are removed before you see them.
+    </p>
+    <div class="fields">
+      <label>Question
+        <input type="text" id="ask-question" autocomplete="off" spellcheck="false"
+               placeholder="what should I fix first · what changed · which accounts expose my real name">
+      </label>
+    </div>
+    <label class="check">
+      <input type="checkbox" id="ask-include-values">
+      Send raw identifiers in the prompt
+      <span class="hint">(off: the model sees masked values like al***@example.com)</span>
+    </label>
+    <div class="actions">
+      <button id="ask-submit" type="button">Ask</button>
+      <button id="ask-reset" type="button" class="link">forget conversation</button>
+      <span class="status" id="ask-status"></span>
+    </div>
+    <div id="ask-answer" class="ask-answer" hidden></div>
+    <div id="ask-setup" class="fineprint"></div>
+  </div>
+</section>
+
 <section>
   <h2>Stored scans</h2>
   {% if scans %}

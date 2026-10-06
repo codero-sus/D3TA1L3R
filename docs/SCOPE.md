@@ -86,6 +86,43 @@ Consequences that were designed in, not discovered later:
 - **No consolidation.** Results are never merged into a "risk score", never sent
   anywhere, and never enriched with data from another source.
 
+## 2b. The local model: a model on your machine, or none
+
+`ask` (CLI and dashboard) can turn a report into prose. That is a new place where
+personal data could travel, so the rules are explicit:
+
+- **Two real backends, both on this machine.** A GGUF file loaded with
+  `llama-cpp-python`, or an Ollama daemon. `OllamaBackend` refuses any host that
+  is not `127.0.0.1`/`localhost`/`::1` — a "local model" that is really an HTTP
+  call to a company is data exfiltration with better wording, so it is a hard
+  error rather than a warning. There is no hosted-model client anywhere in the
+  codebase, and a test asserts that no commercial model endpoint is named under
+  `d3ta1l3r/llm/`.
+- **Masked by default.** The digest the model sees carries `al***@example.com`,
+  not your address. `--include-values` (CLI) or the panel's checkbox includes the
+  real identifiers — an explicit, per-invocation decision, defensible only
+  because the model is on the same machine. Masking is a scrub, not a format: it
+  also covers finding URLs (`https://github.com/alice`), evidence strings and
+  labels, which is where a handle usually hides.
+- **Answers are tied to ids.** Context lines are numbered (`F1-003` = finding 3
+  of scan 1, `E2` = watchlist entry 2, `G1-01` = a gap) and the model is required
+  to cite them. Every cited id is verified against the context that produced the
+  answer: invented ids are reported by the CLI and stripped by the dashboard, and
+  an answer with no citation is marked ungrounded rather than trusted.
+- **A gap stays a gap.** The digest includes the sources that could not be
+  checked, so "what could not be checked?" is answerable. The prompt forbids
+  inventing findings, counts or URLs, and a model failure degrades to retrieval
+  over the report with a note in the answer.
+- **No model is a supported state.** Without either backend the same command
+  answers from the report by keyword retrieval and says so; the dashboard shows
+  which backend spoke, including when the answer was not generated at all.
+- **Size, honestly.** `--ram-budget` (default 4096 MB) refuses to load a GGUF
+  whose weights plus KV cache do not fit, and `d3ta1l3r ask --list-models` prints
+  what fits a 4 GB machine before anything is downloaded. Nothing here needs a
+  GPU.
+- **The transcript is not a document.** Conversations are held in memory per
+  session and dropped on logout or exit. Chat is not evidence: the reports are.
+
 ## 3. Why the limits are where they are
 
 - **Public ≠ fair game.** Publicly reachable data about a person is still
@@ -129,6 +166,11 @@ Consequences that were designed in, not discovered later:
   recovery path and no escrow: lose the passphrase and the file is gone.
 - **Breach reports** (`scans/breach/*.json`, `latest.json`): counts, statuses and
   masked values only — the same personal-data rules as scan reports apply.
+- **Report chat** (`d3ta1l3r ask`, and the dashboard panel): the question, the
+  digest and the answer exist only in memory. Nothing is written to disk, so the
+  clean-up rules for reports do not apply to it, and closing the process is the
+  whole story. Model weights you download yourself (a GGUF file, an Ollama
+  model) live wherever you put them; D3TA1L3R never fetches one for you.
 
 ## 5. Threat model
 
@@ -192,6 +234,8 @@ After a scan:
       `0600`, and I have decided whether to back it up (there is no recovery).
 - [ ] I have read what each breach source sends — and I am not treating a gap as
       good news.
+- [ ] If I used `ask`: I know which backend answered, the raw-values flag was my
+      choice, and nothing it said replaces the report it came from.
 
 ## 7. Reporting a problem
 

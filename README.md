@@ -97,6 +97,10 @@ d3ta1l3r breach run                 # exit 3 if something was found, 2 if nothin
 
 # 8. ...and have the dashboard re-check it every time you log in
 d3ta1l3r web --vault --port 8000    # the login passphrase *is* the vault passphrase
+
+# 9. Ask questions about your own scans — with a model on this machine
+d3ta1l3r ask "what should I fix first, and what could not be checked?"
+d3ta1l3r ask --list-models           # what fits in 4 GB, and what is installed
 ```
 
 Reports land in `./scans/` as `20261005T091500Z-<target>-<scan_id>.{json,md,html}`.
@@ -214,6 +218,67 @@ browser and never passed to the server process as an argument; sessions are
 `HttpOnly` + `SameSite=Lax`, live 8 hours, and die when the process restarts.
 Five failed logins lock that address out for five minutes.
 
+## Ask your own scans (a local model, or none)
+
+A report answers the questions you thought to ask. `ask` answers the ones you
+think of while reading it — *what should I fix first?*, *which of these still
+exposes my real name?*, *what could not be checked?* — using a model that runs
+**on this machine**, or, if there is no model, plain retrieval over the report.
+
+```bash
+d3ta1l3r ask --list-models "which model fits?"     # probe backends + the 4 GB table
+d3ta1l3r ask "what should I fix first?"            # masks identifiers by default
+d3ta1l3r ask "where is my handle visible?" --include-values
+d3ta1l3r ask --report scans/20261005T091500Z-demo_user-abc123.json "what changed?"
+d3ta1l3r ask "is my email in the breach watch?" --json
+```
+
+Two backends are real, and both are local:
+
+```bash
+pip install llama-cpp-python                # optional extra, builds from source
+d3ta1l3r ask --model ~/models/qwen2.5-1.5b-instruct-q4_k_m.gguf "summarise"
+
+# or an Ollama daemon on loopback (the only host it will talk to)
+ollama pull llama3.2:1b
+d3ta1l3r ask --backend ollama --ollama-model llama3.2:1b "summarise"
+```
+
+Right-sized for a 4 GB machine (CPU only, no GPU):
+
+| Model | Download | Resident | Note |
+| --- | --- | --- | --- |
+| TinyLlama-1.1B-Chat Q4_K_M | ~670 MB | ~900 MB | smallest useful chat model |
+| Qwen2.5-1.5B-Instruct Q4_K_M | ~1.1 GB | ~1.5 GB | the best balance at this size |
+| Llama-3.2-3B-Instruct Q4_K_M | ~2.0 GB | ~2.4 GB | better prose, little headroom left |
+| Phi-3-mini-4k-instruct Q4 | ~2.3 GB | ~2.7 GB | upper bound; expect swapping |
+
+`--ram-budget` (default 4096 MB) makes the tool *refuse* a model that would not
+fit rather than letting the OOM killer decide, and the KV cache is counted with
+the weights.
+
+What the feature promises, and what the tests pin:
+
+- **It is local, and that is enforced.** `OllamaBackend` raises on any non-loopback
+  host; there is no hosted-model client in the codebase, and a test asserts no
+  commercial model API is named anywhere under `d3ta1l3r/llm/`.
+- **Answers cite ids.** The prompt is a numbered digest (`F1-003` is finding 3 of
+  scan 1, `E2` is watchlist entry 2, `G1-01` is a gap) and the model must cite
+  what it used. Invented ids are detected and reported by the CLI; the dashboard
+  removes them before rendering.
+- **Masked by default.** Identifiers reach the prompt as `al***@example.com`
+  unless you pass `--include-values`. Masking also scrubs finding URLs, evidence
+  text and labels, because that is where a handle actually hides.
+- **Nothing is written to disk.** Transcripts live in memory for the session and
+  are dropped on logout; asking a question never adds a file next to your reports.
+- **No model is a valid answer.** Without `llama-cpp-python` or Ollama, the same
+  command answers from the report by retrieval and says so — the chat is never a
+  dead box, and it never pretends a retrieval answer came from a model.
+
+The dashboard has the same panel (question box, raw-values toggle, "answered by"
+line) on the main page once you are signed in. `ask` needs a report: run a scan
+first, or point it at a JSON file with `--report`.
+
 ## Watching for changes
 
 ```bash
@@ -292,9 +357,13 @@ d3ta1l3r/
   data/sites.json     the signature database (data, not code)
   vault.py            encrypted watchlist (scrypt + Fernet, atomic 0600 writes)
   breach.py           breach sources: k-anonymity range API, HIBP, local corpus
+  llm/                the local report chat (GGUF, loopback Ollama, retrieval)
+    context.py        the numbered digest a model may cite
+    backends.py       local-only backends + the 4 GB sizing arithmetic
+    cite.py           citation verification (invented ids are caught)
   web/                FastAPI dashboard + templates + assets
     auth.py           sessions, login throttle, CSRF/origin guard
-tests/                469 tests, offline via httpx.MockTransport
+tests/                526 tests, offline via httpx.MockTransport
 ```
 
 Design rules enforced in code (and in the test suite):
@@ -320,7 +389,7 @@ Design rules enforced in code (and in the test suite):
 
 ```bash
 pip install -e '.[dev]'
-pytest                       # 469 tests, no network access required
+pytest                       # 526 tests, no network access required
 pytest -m network            # opt-in: the handful of live checks
 ruff check d3ta1l3r tests
 ```

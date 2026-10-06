@@ -35,6 +35,11 @@ web = [
   # Starlette parses the login <form> with it.
   "python-multipart>=0.0.9",
 ]
+llm = [
+  # Optional: load a GGUF model in-process. Builds from source, needs a C
+  # toolchain; Ollama users do not need it, and neither does `ask` itself.
+  "llama-cpp-python>=0.2.90",
+]
 dev = [
   # The dashboard tests import the app, so `.[dev]` has to carry the web stack
   # too — otherwise `pip install -e '.[dev]' && pytest` fails at collection.

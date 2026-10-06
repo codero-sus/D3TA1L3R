@@ -53,6 +53,17 @@ jobs:
           d3ta1l3r breach run --demo --quiet --no-save --passphrase-file /tmp/d3ta1l3r-pass || test $? -eq 3
           d3ta1l3r breach sources
 
+      - name: Smoke-test the report chat (offline, no model installed)
+        run: |
+          # Its own scan, so this step cannot pass by finding nothing to ask about.
+          rm -rf /tmp/d3ta1l3r-ask
+          d3ta1l3r scan -u ci_smoke -e ci.smoke@example.com --demo -o /tmp/d3ta1l3r-ask
+          d3ta1l3r ask --list-models
+          d3ta1l3r ask "what could not be checked?" -o /tmp/d3ta1l3r-ask --no-watchlist -y
+          d3ta1l3r ask "what is exposed?" -o /tmp/d3ta1l3r-ask --no-watchlist -y --json > /tmp/ask.json
+          python -c 'import json; d=json.load(open("/tmp/ask.json")); assert d["citations"], d; assert d["backend"]; print("ask ok:", len(d["citations"]), "citations from", d["backend"])'
+          python -c 'import json; d=json.load(open("/tmp/ask.json")); assert "ci_smoke" not in d["answer"], "raw handle leaked without --include-values"; print("masking ok")'
+
       - name: Smoke-test the dashboard
         run: |
           python - <<'PY'
