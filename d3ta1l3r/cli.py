@@ -53,7 +53,9 @@ from .breach import (
 from .config import ScanConfig
 from .core.engine import ScanEngine
 from .core.report import diff_reports, render_html, render_json, render_markdown
+from .core.storage import ScanStore
 from .errors import D3ta1l3rError, UsageError
+from .llm import ChatSession, build_context, model_doctor, select_backend
 from .models import (
     EVENT_SCAN_FINISHED,
     EVENT_SOURCE_FINISHED,
@@ -335,6 +337,65 @@ def build_parser() -> argparse.ArgumentParser:
     web.add_argument("--jobs", "-j", type=int, default=None)
     web.add_argument("--rps", type=float, default=None)
     web.add_argument("--no-robots", dest="respect_robots", action="store_false", default=True)
+    web.add_argument("--model", metavar="PATH",
+                     help="GGUF file for the local report chat (needs llama-cpp-python)")
+    web.add_argument("--chat-backend", choices=("auto", "llama_cpp", "ollama", "extractive"),
+                     default="auto",
+                     help="which local backend answers questions about the scans")
+    web.add_argument("--ollama-model", default="llama3.2:1b", metavar="NAME",
+                     help="Ollama model name for the chat (default llama3.2:1b)")
+    web.add_argument("--ollama-host", default="http://127.0.0.1:11434", metavar="URL",
+                     help="Ollama daemon; loopback only")
+    ask = sub.add_parser(
+        "ask",
+        help="ask a question about your stored scans with a model on this machine",
+        description=(
+            "Answers are produced by a local model only (llama_cpp GGUF file or a "
+            "loopback Ollama daemon) or, when neither is available, by retrieval over "
+            "the report itself. Every answer cites ids from the digest it was given."
+        ),
+    )
+    ask.add_argument("question", nargs="?", help="the question, e.g. 'what should I fix first?'")
+    ask.add_argument("--report", action="append", type=Path, metavar="FILE",
+                     help="a report JSON to ask about (repeatable; default: stored scans)")
+    ask.add_argument("--scan", action="append", metavar="ID", help="a stored scan id (repeatable)")
+    ask.add_argument("--limit", type=int, default=3,
+                     help="how many recent scans to include by default (default 3)")
+    ask.add_argument("--output", "-o", default=str(DEFAULT_OUTPUT_DIR),
+                     help="where reports are stored (default: scans/)")
+    ask.add_argument("--no-watchlist", dest="no_watchlist", action="store_true",
+                     help="do not read the vault, even if one is present")
+    ask.add_argument("--backend", choices=("auto", "llama_cpp", "ollama", "extractive"),
+                     default="auto",
+                     help="which local backend to use (default: auto, best available)")
+    ask.add_argument("--model", metavar="PATH",
+                     help="GGUF file to load with llama-cpp-python")
+    ask.add_argument("--ollama-model", default="llama3.2:1b", metavar="NAME",
+                     help="Ollama model name (default llama3.2:1b)")
+    ask.add_argument("--ollama-host", default="http://127.0.0.1:11434", metavar="URL",
+                     help="Ollama daemon; loopback only")
+    ask.add_argument("--threads", type=int, default=None,
+                     help="CPU threads for the model (default: cores - 1, capped at 4)")
+    ask.add_argument("--context-size", type=int, default=2048, metavar="TOKENS",
+                     help="model context window (default 2048; smaller = less RAM)")
+    ask.add_argument("--ram-budget", type=int, default=4096, metavar="MB",
+                     help="refuse to load a model that needs more than this (default 4096)")
+    ask.add_argument("--context-chars", type=int, default=6000, metavar="N",
+                     help="how much of the digest to put in the prompt (default 6000)")
+    ask.add_argument("--max-findings", type=int, default=None, metavar="N",
+                     help="at most N findings per scan in the prompt")
+    ask.add_argument("--include-values", dest="include_values", action="store_true",
+                     help="send raw identifiers to the model (default: masked)")
+    ask.add_argument("--yes", "-y", action="store_true",
+                     help="do not print the masking note (for scripts)")
+    ask.add_argument("--list-models", action="store_true",
+                     help="show which backends work here and what fits in 4 GB, then exit")
+    ask.add_argument("--json", action="store_true", help="print the answer as JSON")
+    ask.add_argument("--vault", nargs="?", const="", default=None, metavar="PATH",
+                     help="vault to read the watchlist from (default: the standard vault)")
+    ask.add_argument("--passphrase-file", metavar="FILE",
+                     help="read the vault passphrase from this file instead of prompting")
+    ask.add_argument("--demo", action="store_true", help="mark demo reports in the digest")
     return parser
 
 
@@ -359,6 +420,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             return cmd_vault(args)
         if args.command == "breach":
             return cmd_breach(args)
+        if args.command == "ask":
+            return cmd_ask(args)
     except UsageError as exc:
         print(f"error: {exc}", file=sys.stderr)
         return EXIT_USAGE
@@ -740,6 +803,10 @@ def cmd_web(args: argparse.Namespace) -> int:
         config=_config_from_args(args),
         vault_path=vault_path,
         breach_config=_breach_config(args),
+        chat_backend=args.chat_backend,
+        chat_model_path=Path(args.model).expanduser() if args.model else None,
+        ollama_model=args.ollama_model,
+        ollama_host=args.ollama_host,
     )
     settings.output_dir.mkdir(parents=True, exist_ok=True)
     app = create_app(settings)
@@ -749,6 +816,12 @@ def cmd_web(args: argparse.Namespace) -> int:
         print("  Sign in with the vault passphrase. It is entered in the browser and is")
         print("  never passed to this process; each login re-checks the watchlist.")
         _verify_vault_at_startup(vault_path)
+    if args.model:
+        print(f"Report chat: {args.model} (local GGUF; raw values are opt-in per question)")
+    elif args.chat_backend == "extractive":
+        print("Report chat: retrieval over the report (no model loaded).")
+    elif args.demo:
+        print("Report chat: a local model if one is available (the page says which).")
     if args.demo:
         print("DEMO MODE: scans are served from synthetic fixtures; no third party is contacted.")
     uvicorn.run(app, host=args.host, port=args.port, reload=bool(args.reload), log_level="info")
@@ -989,7 +1062,9 @@ def _vault_add(vault: Vault, args: argparse.Namespace) -> int:
         record_outcomes(vault, report)
         vault.save()
     print()
-    _print_breach(report, verbose=False)
+    _print_breach(
+        report, verbose=False, single=True, demo=bool(getattr(args, "demo", False))
+    )
     return EXIT_NEW_FINDINGS if report.counts().get("pwned") else EXIT_OK
 
 
@@ -1209,12 +1284,22 @@ def _breach_corpus_hash(args: argparse.Namespace) -> int:
     return EXIT_OK
 
 
-def _print_breach(report: BreachReport, *, verbose: bool) -> None:
+def _print_breach(
+    report: BreachReport, *, verbose: bool, single: bool = False, demo: bool = False
+) -> None:
     counts = report.entry_counts()
     print(report.headline())
     if verbose:
         print()
         print(report.render_markdown())
+        return
+    if single and demo:
+        # One identifier, demo fixtures: the full markdown headline rules are
+        # noise on the back of a question the user just asked interactively.
+        for check in report.checks:
+            print(f"  {check.source_id}: {check.status.value} — {check.detail or check.evidence}")
+        for gap in report.unavailable:
+            print(f"  ! {gap['source_id']}: {gap['reason'][:96]}")
         return
     for entry in report.entries:
         detail = " · ".join(
@@ -1228,6 +1313,163 @@ def _print_breach(report: BreachReport, *, verbose: bool) -> None:
         f"{counts.get('clean', 0)} not found · "
         f"{counts.get('unknown', 0) + counts.get('unsupported', 0)} not checked"
     )
+
+
+# ---------------------------------------------------------------------------
+# ask (local model, optional)
+# ---------------------------------------------------------------------------
+def cmd_ask(args: argparse.Namespace) -> int:
+    """Answer a question about your own stored scans with a local model.
+
+    Three things make this safe to point at a report full of personal data:
+    the model is on this machine (``llama_cpp`` or a loopback Ollama — never a
+    remote host), answers must cite ids from the digest they were given, and
+    nothing here is written to disk. The trust prompt exists because
+    ``Ctrl-R`` plus a plausible sentence is exactly how a wrong answer becomes
+    a fact.
+    """
+    if getattr(args, "list_models", False):
+        return _ask_models()
+    if not args.question:
+        raise UsageError(
+            "ask a question: d3ta1l3r ask \"what should I fix first?\"  "
+            "(use --list-models to see what fits in 4 GB)"
+        )
+
+    reports, watchlist, breach = _ask_sources(args)
+    if not reports and not watchlist:
+        raise UsageError(
+            "there is nothing to ask about yet: run a scan, or add something to the "
+            "watchlist with `d3ta1l3r vault add`"
+        )
+
+    backend, notes = select_backend(
+        prefer=args.backend,
+        model_path=Path(args.model).expanduser() if args.model else None,
+        ollama_model=args.ollama_model,
+        ollama_host=args.ollama_host,
+        threads=args.threads,
+        context_window=args.context_size,
+        ram_budget_mb=args.ram_budget,
+    )
+    include_values = _confirm_raw_values(args, backend)
+    context = build_context(
+        reports,
+        watchlist=watchlist,
+        breach=breach,
+        include_values=include_values,
+        max_findings_per_scan=args.max_findings,
+    )
+    for note in notes:
+        print(f"note: {note}", file=sys.stderr)
+    if backend.is_model:
+        print(
+            f"answering with {backend.name} ({backend.model_id}); "
+            f"{len(context.items)} context line(s), raw values "
+            f"{'included' if include_values else 'masked'}",
+            file=sys.stderr,
+        )
+    else:
+        print(
+            "no local model available — answering from the report itself "
+            "(see `d3ta1l3r ask --list-models`)",
+            file=sys.stderr,
+        )
+
+    session = ChatSession(context, backend, notes=notes, context_chars=args.context_chars)
+    answer = session.ask(args.question)
+    if args.json:
+        print(json.dumps(answer.to_dict(), indent=2))
+        return EXIT_OK
+
+    print()
+    print(answer.text.strip())
+    problem = answer.citation_problem
+    if problem:
+        print(f"\n! {problem}", file=sys.stderr)
+    else:
+        print(
+            f"\n— {len(answer.citations)} citation(s), all present in the context, "
+            f"in {answer.elapsed_ms} ms. Nothing was written to disk.",
+            file=sys.stderr,
+        )
+    return EXIT_OK
+
+
+def _ask_models() -> int:
+    """What would run here, and what fits in 4 GB."""
+    report = model_doctor()
+    print(f"RAM budget: {report['ram_budget_mb']} MB · context {report['context_window']} tokens "
+          f"· threads {report['threads']}")
+    print(f"selected: {report['selected'] or 'nothing — see below'}\n")
+    for backend in report["backends"]:
+        state = "ready" if backend["available"] else "unavailable"
+        print(f"  {backend['name']:<11} {state:<12} {backend['model']}")
+        if not backend["available"]:
+            print(f"      why: {backend['reason']}")
+    print("\nModels that fit this machine (quantised, CPU-only):")
+    for item in report["recommendations"]:
+        print(
+            f"  {item['name']:<36} ~{item['download_mb']:>5} MB download, "
+            f"~{item['ram_mb']:>4} MB RAM  — {item['note']}"
+        )
+    print("\nTo use a GGUF file:")
+    print("  pip install llama-cpp-python")
+    print("  d3ta1l3r ask --model ~/models/qwen2.5-1.5b-instruct-q4_k_m.gguf \"what should I fix first?\"")
+    print("Or point at an Ollama daemon on this machine:")
+    print("  ollama pull llama3.2:1b && d3ta1l3r ask --backend ollama \"what changed?\"")
+    return EXIT_OK
+
+
+def _ask_sources(
+    args: argparse.Namespace,
+) -> tuple[list[ScanReport], list[VaultEntry], dict[str, Any] | None]:
+    """Load the reports (and watchlist) the question is about."""
+    reports: list[ScanReport] = []
+    for path in args.report or []:
+        reports.append(_load_report(path))
+
+    store = ScanStore(Path(args.output))
+    if not reports:
+        wanted = args.scan or [meta.scan_id for meta in store.list(limit=args.limit)]
+        if not args.scan:
+            print(
+                f"using the {len(wanted)} most recent scan(s) in {store.directory}",
+                file=sys.stderr,
+            )
+        for scan_id in wanted:
+            report = store.load(scan_id)
+            if report is None:
+                raise UsageError(f"no stored scan with id {scan_id} in {store.directory}")
+            reports.append(report)
+
+    watchlist: list[VaultEntry] = []
+    if not args.no_watchlist:
+        # A missing vault is not an error here: `ask` is useful against stored
+        # reports alone, and the watchlist only sharpens the answer.
+        path = _vault_path(args)
+        if path.is_file():
+            watchlist = Vault.open(path, _passphrase(args)).entries
+    return reports, watchlist, None
+
+
+def _confirm_raw_values(args: argparse.Namespace, backend: Any) -> bool:
+    """Raw identifiers in the prompt are opt-in, and said out loud when implied.
+
+    The digest is masked by default. ``--include-values`` includes them, and
+    ``--yes`` is the explicit acknowledgement that the model will see them, so
+    an interactive user is told in as many words rather than finding out later
+    from a log of prompts.
+    """
+    if args.include_values:
+        return True
+    if not args.yes:
+        print(
+            "note: identifiers in the prompt are masked; pass --include-values to "
+            "send them raw (only ever to a local model).",
+            file=sys.stderr,
+        )
+    return False
 
 
 # ---------------------------------------------------------------------------

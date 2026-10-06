@@ -35,7 +35,16 @@ class TestReadme:
             action for action in parser._actions if hasattr(action, "choices") and action.choices
         ]
         commands = set(subparsers[-1].choices)
-        assert commands == {"scan", "sources", "calibrate", "diff", "vault", "breach", "web"}
+        assert commands == {
+            "scan",
+            "sources",
+            "calibrate",
+            "diff",
+            "vault",
+            "breach",
+            "web",
+            "ask",
+        }
         readme = _read("README.md")
         for command in commands:
             assert f"d3ta1l3r {command}" in readme, command
@@ -55,6 +64,40 @@ class TestReadme:
         assert f"**{total} public sources**" in readme, (total, "README.md")
         sources_doc = _read("docs/SOURCES.md")
         assert f"{total} sources, {enabled} enabled by default" in sources_doc
+
+    def test_the_chat_is_documented_as_local_only(self) -> None:
+        """README and SCOPE must say the model runs here, and where it cannot run."""
+        readme = _read("README.md")
+        scope = _read("docs/SCOPE.md")
+        for text in (readme, scope):
+            assert "ask" in text
+        assert "d3ta1l3r ask" in readme
+        assert "loopback" in scope.lower() or "127.0.0.1" in scope
+
+    def test_no_remote_model_endpoint_appears_in_the_chat_code(self) -> None:
+        """A local model feature must not name a hosted model API anywhere."""
+        banned = (
+            "api.openai.com",
+            "openai.com/v1",
+            "api.anthropic.com",
+            "generativelanguage.googleapis.com",
+            "api.mistral.ai",
+            "api.groq.com",
+            "openrouter.ai",
+            "api.together.xyz",
+            "huggingface.co/api",
+            "cohere.ai",
+        )
+        chat_files = sorted((ROOT / "d3ta1l3r" / "llm").glob("*.py"))
+        assert chat_files, "the llm package must exist for this test to mean anything"
+        for path in chat_files:
+            body = path.read_text(encoding="utf-8")
+            for term in banned:
+                assert term not in body, f"{path.name} names a hosted model API: {term}"
+
+    def test_the_chat_says_it_is_not_persisted(self) -> None:
+        readme = _read("README.md")
+        assert "never written to disk" in readme or "nothing is written to disk" in readme.lower()
 
     def test_documented_scope_refusals_match_the_code(self) -> None:
         """The services SCOPE.md refuses must not appear in the source tree.

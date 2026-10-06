@@ -39,6 +39,7 @@ Two security notes that the routes depend on:
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 from collections import deque
 from dataclasses import dataclass, field
@@ -72,6 +73,12 @@ from ..core.engine import ScanEngine
 from ..core.report import render_html, render_json, render_markdown
 from ..core.storage import ScanStore
 from ..errors import D3ta1l3rError, UsageError
+from ..llm import (
+    ChatSession,
+    build_context,
+    model_doctor,
+    select_backend,
+)
 from ..models import Confidence, ScanEvent, ScanReport, ScanTarget
 from ..sources.probe import load_site_specs
 from ..vault import Vault, VaultError, VaultKind
@@ -107,6 +114,12 @@ class AppSettings:
     """A vault to unlock at login. The passphrase is never read at startup."""
     breach_config: BreachConfig = field(default_factory=BreachConfig)
     trusted_origins: tuple[str, ...] = ()
+    chat_backend: str = "auto"
+    """Which local chat backend to prefer. Never remote — see d3ta1l3r.llm."""
+    chat_model_path: Path | None = None
+    """A GGUF file for llama-cpp-python; None falls back to Ollama, then retrieval."""
+    ollama_model: str = "llama3.2:1b"
+    ollama_host: str = "http://127.0.0.1:11434"
 
     def base_config(self) -> ScanConfig:
         """The config every scan inherits — including the dashboard's demo switch.
@@ -210,6 +223,23 @@ class VaultEntryRequest(BaseModel):
     check_now: bool = True
 
 
+class AskRequest(BaseModel):
+    """Body of ``POST /api/ask``.
+
+    ``include_values`` is the operator's explicit choice to put raw identifiers
+    in the prompt. The model is local either way; the default is masked because
+    a dashboard field should not decide that question on the user's behalf.
+    """
+
+    question: str = Field(min_length=1, max_length=600)
+    scans: list[str] = Field(default_factory=list)
+    limit: int = Field(default=3, ge=1, le=25)
+    include_values: bool = False
+    backend: str = ""  # "" = whatever the dashboard was started with
+    max_findings: int | None = Field(default=None, ge=1, le=200)
+    reset: bool = False
+
+
 @dataclass
 class RunState:
     """In-memory state for one dashboard-initiated scan."""
@@ -299,6 +329,11 @@ def create_app(settings: AppSettings | None = None) -> FastAPI:
     app.state.runs = runs
     app.state.breach = breach
     app.state.sessions = sessions
+    #: One conversation per signed-in session, in memory only. Transcripts are
+    #: never written next to the reports: the vault is the encrypted home of the
+    #: identifiers, and a plaintext copy of a chat about them would undo that.
+    chats: dict[str, ChatSession] = {}
+    app.state.chats = chats
     app.mount("/static", StaticFiles(directory=str(_HERE / "static")), name="static")
     templates = Jinja2Templates(directory=str(_HERE / "templates"))
 
@@ -530,6 +565,8 @@ def create_app(settings: AppSettings | None = None) -> FastAPI:
 
     @app.post("/logout")
     async def logout(request: Request) -> Any:
+        if _token(request):
+            chats.pop(hashlib.sha256((_token(request) or "").encode()).hexdigest()[:16], None)
         sessions.revoke(_token(request))
         if settings.vault is not None or settings.vault_path is not None:
             breach.report = None
@@ -762,6 +799,98 @@ def create_app(settings: AppSettings | None = None) -> FastAPI:
             "sites": rows,
             "false_positive_sites": [r["id"] for r in rows if r["counts"]["false_positive"]],
         }
+
+    # -- chat over your own scans (local model only) ----------------------
+    def _chat_context(payload: AskRequest) -> Any:
+        """Build the digest the question is answered from, newest scan first."""
+        wanted = payload.scans or [meta.scan_id for meta in store.list(limit=payload.limit)]
+        reports = []
+        for scan_id in wanted:
+            report = store.load(scan_id)
+            if report is not None:
+                reports.append(report)
+        watchlist = settings.vault.entries if settings.vault is not None else []
+        return build_context(
+            reports,
+            watchlist=watchlist,
+            breach=breach.to_dict(),
+            include_values=payload.include_values,
+            max_findings_per_scan=payload.max_findings,
+        )
+
+    def _chat_for(request: Request, payload: AskRequest) -> ChatSession:
+        """One conversation per session cookie, discarded on logout."""
+        token = _token(request) or "anonymous"
+        key = hashlib.sha256(token.encode()).hexdigest()[:16]
+        existing = chats.get(key)
+        fresh_context = _chat_context(payload)
+        if existing is not None and not payload.reset and existing.context.values_included == (
+            payload.include_values
+        ):
+            existing.context = fresh_context  # reports may have changed since the last turn
+            return existing
+        backend, notes = select_backend(
+            prefer=payload.backend or settings.chat_backend,
+            model_path=settings.chat_model_path,
+            ollama_model=settings.ollama_model,
+            ollama_host=settings.ollama_host,
+        )
+        session = ChatSession(fresh_context, backend, notes=notes)
+        chats[key] = session
+        if len(chats) > 64:  # keep memory bounded on a 4 GB machine
+            for stale in list(chats)[: len(chats) - 64]:
+                chats.pop(stale, None)
+        return session
+
+    @app.get("/api/ask/setup")
+    async def api_ask_setup(request: Request) -> dict[str, Any]:
+        """What could answer a question here. Available before any model is installed."""
+        if not _signed_in(request):
+            raise HTTPException(status_code=401, detail="sign in to use the dashboard")
+        try:
+            return model_doctor(settings.chat_model_path)
+        except Exception as exc:  # a broken daemon must not break the page
+            return {
+                "ram_budget_mb": 0,
+                "selected": None,
+                "backends": [],
+                "recommendations": [],
+                "error": f"the local model probe failed: {exc.__class__.__name__}",
+            }
+
+    @app.post("/api/ask")
+    async def api_ask(payload: AskRequest, request: Request) -> JSONResponse:
+        """Answer a question about the reports in this dashboard."""
+        if not _signed_in(request):
+            raise HTTPException(status_code=401, detail="sign in to use the dashboard")
+        if not (payload.question or "").strip():
+            raise HTTPException(status_code=422, detail="ask a question")
+        try:
+            session = _chat_for(request, payload)
+            answer = session.ask(payload.question)
+        except (UsageError, D3ta1l3rError) as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        body = answer.to_dict(strip_unknown=True)
+        body["session"] = {
+            "backend": session.backend.name,
+            "model": session.backend.model_id,
+            "is_model": session.backend.is_model,
+            "values_included": session.context.values_included,
+            "context_items": len(session.context.items),
+            "turns": len(session.history),
+            "stored_to_disk": False,
+        }
+        body["notes"] = list(session.notes)
+        return JSONResponse(body)
+
+    @app.post("/api/ask/reset")
+    async def api_ask_reset(request: Request) -> dict[str, Any]:
+        if not _signed_in(request):
+            raise HTTPException(status_code=401, detail="sign in to use the dashboard")
+        token = _token(request) or "anonymous"
+        key = hashlib.sha256(token.encode()).hexdigest()[:16]
+        session = chats.pop(key, None)
+        return {"reset": session is not None, "turns": 0}
 
     # -- watchlist (vault) -----------------------------------------------
     @app.get("/api/vault")

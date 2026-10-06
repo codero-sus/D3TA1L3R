@@ -380,6 +380,127 @@
     if (state && state.getAttribute("data-status") === "running") pollBreach();
   }
 
+  async function loadAskSetup() {
+    const box = $("#ask-setup");
+    if (!box) return;
+    try {
+      const response = await fetch("/api/ask/setup");
+      if (!response.ok) return;
+      const setup = await response.json();
+      if (setup.error) {
+        box.textContent = setup.error;
+        return;
+      }
+      const ready = (setup.backends || []).filter((b) => b.available).map((b) => b.name);
+      const chosen = setup.selected
+        ? setup.selected === "extractive"
+          ? "no local model installed — answers come from the report itself"
+          : "answering with " + setup.selected
+        : "no backend available";
+      const best = (setup.recommendations || [])[0];
+      box.textContent =
+        chosen +
+        (ready.length ? " (ready: " + ready.join(", ") + ")" : "") +
+        (best && setup.selected === "extractive"
+          ? " · a " + best.name + " needs ~" + best.ram_mb + " MB of RAM and fits your " +
+            setup.ram_budget_mb + " MB budget"
+          : "");
+    } catch (error) {
+      /* a missing probe is not worth an error banner */
+    }
+  }
+
+  function renderAnswer(payload) {
+    const box = $("#ask-answer");
+    box.hidden = false;
+    box.textContent = "";
+    const body = document.createElement("pre");
+    body.className = "ask-text";
+    body.textContent = payload.answer;
+    box.appendChild(body);
+
+    const meta = document.createElement("p");
+    meta.className = "fineprint";
+    const source = payload.session || {};
+    const bits = [
+      "answered by " + (source.model || payload.model || "?") +
+        (source.is_model ? "" : " (retrieval, not generation)"),
+      (payload.citations || []).length + " citation(s)",
+      (source.context_items || 0) + " context line(s)",
+      "raw values " + (source.values_included ? "included" : "masked"),
+      "nothing written to disk",
+    ];
+    meta.textContent = bits.join(" · ");
+    box.appendChild(meta);
+
+    if (payload.citation_problem) {
+      const warn = document.createElement("p");
+      warn.className = "warn-text";
+      warn.textContent = payload.citation_problem;
+      box.appendChild(warn);
+    }
+  }
+
+  async function askQuestion() {
+    const input = $("#ask-question");
+    const status = $("#ask-status");
+    const question = (input.value || "").trim();
+    if (!question) {
+      status.textContent = "ask something first";
+      return;
+    }
+    const button = $("#ask-submit");
+    button.disabled = true;
+    status.textContent = "thinking (a 1.5B model takes a few seconds on CPU)…";
+    try {
+      const response = await fetch("/api/ask", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          question: question,
+          include_values: !!$("#ask-include-values").checked,
+        }),
+      });
+      if (!response.ok) {
+        const detail = await response.json().catch(() => ({}));
+        status.textContent = detail.detail || "the ask endpoint refused (" + response.status + ")";
+        return;
+      }
+      const payload = await response.json();
+      status.textContent = payload.elapsed_ms + " ms";
+      renderAnswer(payload);
+    } catch (error) {
+      status.textContent = "the request failed: " + error;
+    } finally {
+      button.disabled = false;
+    }
+  }
+
+  async function resetChat() {
+    const box = $("#ask-answer");
+    const status = $("#ask-status");
+    await fetch("/api/ask/reset", { method: "POST" }).catch(() => {});
+    box.hidden = true;
+    box.textContent = "";
+    status.textContent = "conversation forgotten";
+  }
+
+  function wireAsk() {
+    const button = $("#ask-submit");
+    if (!button) return;
+    button.addEventListener("click", askQuestion);
+    const reset = $("#ask-reset");
+    if (reset) reset.addEventListener("click", resetChat);
+    const input = $("#ask-question");
+    input.addEventListener("keydown", (event) => {
+      if (event.key === "Enter") {
+        event.preventDefault();
+        askQuestion();
+      }
+    });
+    loadAskSetup();
+  }
+
   function boot() {
     const form = $("#scan-form");
     if (form) form.addEventListener("submit", startScan);
@@ -387,6 +508,7 @@
     if (calibrate) calibrate.addEventListener("click", runCalibration);
     wireDeletes();
     wireVault();
+    wireAsk();
   }
 
   window.D3TA1L3R = {
@@ -395,6 +517,8 @@
     runCalibration: runCalibration,
     runBreachCheck: runBreachCheck,
     addToWatchlist: addToWatchlist,
+    askQuestion: askQuestion,
+    resetChat: resetChat,
   };
   if (document.readyState === "loading") {
     document.addEventListener("DOMContentLoaded", boot);
