@@ -725,7 +725,6 @@ def cmd_web(args: argparse.Namespace) -> int:
             "the dashboard needs extra packages: pip install 'd3ta1l3r[web]'"
         ) from exc
 
-    from .vault import VaultError
     from .web.app import AppSettings, create_app
 
     vault_path = _web_vault_path(args)
@@ -749,14 +748,32 @@ def cmd_web(args: argparse.Namespace) -> int:
         print(f"Watchlist: {vault_path}")
         print("  Sign in with the vault passphrase. It is entered in the browser and is")
         print("  never passed to this process; each login re-checks the watchlist.")
-        try:
-            Vault.open(vault_path, prompt_secret("Vault passphrase", confirm=False))
-        except VaultError as exc:
-            print(f"  warning: {exc}", file=sys.stderr)
+        _verify_vault_at_startup(vault_path)
     if args.demo:
         print("DEMO MODE: scans are served from synthetic fixtures; no third party is contacted.")
     uvicorn.run(app, host=args.host, port=args.port, reload=bool(args.reload), log_level="info")
     return EXIT_OK
+
+
+def _verify_vault_at_startup(path: Path) -> None:
+    """Check the passphrase before serving — but only when there is one to read.
+
+    An interactive start gets a hidden prompt, and an operator who exported
+    ``D3TA1L3R_VAULT_PASSPHRASE`` is checked against that. A headless start
+    (container, supervisor, preview sandbox) has no terminal at all, and
+    blocking there would stop the server on input that can never arrive — so it
+    says who will ask instead. The unlock itself always happens in the browser
+    login, which is exactly what makes a login worth re-checking the watchlist on.
+    """
+    if not os.isatty(0) and not os.environ.get("D3TA1L3R_VAULT_PASSPHRASE"):
+        print("  no terminal to check the passphrase with — the login page will ask for it.")
+        return
+    try:
+        Vault.open(path, prompt_secret("Vault passphrase", confirm=False))
+    except D3ta1l3rError as exc:
+        print(f"  warning: {exc}", file=sys.stderr)
+    else:
+        print("  passphrase verified.")
 
 
 # ---------------------------------------------------------------------------
