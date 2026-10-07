@@ -100,7 +100,13 @@ d3ta1l3r web --vault --port 8000    # the login passphrase *is* the vault passph
 
 # 9. Ask questions about your own scans — with a model on this machine
 d3ta1l3r ask "what should I fix first, and what could not be checked?"
-d3ta1l3r ask --list-models           # what fits in 4 GB, and what is installed
+
+# 10. Pick a model, and fetch it only if you decide to
+d3ta1l3r models list                 # the catalogue, smallest first, with licences
+d3ta1l3r models pull qwen2.5-1.5b-instruct-q4_k_m   # asks, then downloads, then verifies
+
+# 11. Optionally, let that model give a second opinion on who is who
+d3ta1l3r ask --verify --about "my bios mention chess and Berlin" --only-uncertain
 ```
 
 Reports land in `./scans/` as `20261005T091500Z-<target>-<scan_id>.{json,md,html}`.
@@ -244,6 +250,32 @@ ollama pull llama3.2:1b
 d3ta1l3r ask --backend ollama --ollama-model llama3.2:1b "summarise"
 ```
 
+### The catalogue, and where the weights come from
+
+Ten GGUF models ship as a catalogue — sizes, resident memory, context window and
+licence for each — and nothing is fetched until you name one:
+
+```bash
+d3ta1l3r models list                      # smallest first, with licence and provenance
+d3ta1l3r models list --fits-memory        # only what this machine's RAM can hold
+d3ta1l3r models list --downloaded --json  # what you already have, for scripts
+d3ta1l3r models search qwen2.5 gguf       # live Hugging Face search (no key needed)
+d3ta1l3r models add TheBloke/Some-7B-GGUF/some-7b.Q4_K_M.gguf --name "Some 7B"
+d3ta1l3r models pull qwen2.5-1.5b-instruct-q4_k_m   # size shown, confirmation asked
+d3ta1l3r models path                      # where models live, plus free space
+d3ta1l3r models remove some-7b            # --catalogue-only forgets the entry, keeps the file
+```
+
+The catalogue is listed **before** anything is downloaded, every entry names its
+licence and repository, and `models pull` prints the download size and asks
+first (`--yes` to skip). Files land in `~/.cache/d3ta1l3r/models` (or
+`$D3TA1L3R_MODELS`); a partial download keeps its `.part` file and resumes with
+one range request, a finished one is checked against the length and SHA-256 the
+repository reports, and a file that turns out to be an HTML page is rejected
+rather than kept. Nothing is bundled with this tool and nothing is downloaded
+unless you ask for it by name. `HF_TOKEN` is used only if you have already put
+one in your environment — the public models here need no key.
+
 Right-sized for a 4 GB machine (CPU only, no GPU):
 
 | Model | Download | Resident | Note |
@@ -253,9 +285,14 @@ Right-sized for a 4 GB machine (CPU only, no GPU):
 | Llama-3.2-3B-Instruct Q4_K_M | ~2.0 GB | ~2.4 GB | better prose, little headroom left |
 | Phi-3-mini-4k-instruct Q4 | ~2.3 GB | ~2.7 GB | upper bound; expect swapping |
 
-`--ram-budget` (default 4096 MB) makes the tool *refuse* a model that would not
-fit rather than letting the OOM killer decide, and the KV cache is counted with
-the weights.
+The catalogue goes up to 32B (`qwen2.5-32b-instruct-q4_k_m`, ~19.8 GB) for
+machines that can take it. `--ram-budget` (default 4096 MB) makes the tool
+*refuse* a model that would not fit rather than letting the OOM killer decide,
+and the KV cache is counted with the weights.
+
+`d3ta1l3r ask --model` accepts a path to a `.gguf`, a catalogue id,
+`repo/file.gguf`, or `auto` — which picks the best model that is downloaded *and*
+fits here, and says so when there is none.
 
 What the feature promises, and what the tests pin:
 
@@ -278,6 +315,45 @@ What the feature promises, and what the tests pin:
 The dashboard has the same panel (question box, raw-values toggle, "answered by"
 line) on the main page once you are signed in. `ask` needs a report: run a scan
 first, or point it at a JSON file with `--report`.
+
+### Verifying that a finding is really you (opt-in)
+
+Some findings are ambiguous: a handle that matches, on a site that never shows a
+name. `--verify` hands those to the local model and asks it to judge each one —
+but **only when you ask for it**. A plain `scan`, `ask`, `web` or `breach` run
+never does this, and a test asserts it.
+
+```bash
+d3ta1l3r ask --verify --about "my bios mention chess; I lived in Berlin until 2024"
+d3ta1l3r ask --verify --about-file about-me.txt --only-uncertain   # skip what is already clear
+d3ta1l3r ask --verify --verify-limit 10 --verify-markdown > review.md
+d3ta1l3r ask --verify --json                                       # for the dashboard or a script
+```
+
+The model answers one `VERDICT <id> MINE|NOT_MINE|UNSURE — reason` line per
+finding, and the parser is strict on purpose:
+
+- **A verdict is an opinion, never evidence.** It is stored beside the measured
+  confidence and cannot raise it. A `NOT_MINE` about a `confirmed`/`high`
+  finding is printed with a ⚠ because one of the two is wrong, and the tool will
+  not guess which.
+- **Gibberish is not "yes".** An unparseable `VERDICT` line becomes `unsure` and
+  is marked `parsed: false`; an id the model invented is dropped; a finding the
+  model skipped is filled in as "the model did not answer", not left blank. The
+  prompt tells the model to say `UNSURE` whenever the evidence cannot tell two
+  people apart, and "it's me" is the failure mode the whole design leans against.
+- **No model, no verdict.** If neither `llama-cpp-python` nor Ollama is
+  available, `--verify` exits with an error and judges nothing, rather than
+  printing a page of `unsure` lines that would read like a completed review.
+- **Masked by default.** The identifiers you searched reach the prompt as
+  `al***@example.com` unless you pass `--include-values`; either way, nothing is
+  written to disk.
+
+What this is *not*: proof of ownership. It cannot distinguish you from a
+namesake with a similar profile, and a wrong "looks like you" is more likely
+than a wrong finding. A cryptographic check — a DNS `TXT` record, a `rel=me`
+link, a token posted in a profile you control — would be stronger evidence, and
+is not implemented yet; `docs/SCOPE.md` records it as a known gap.
 
 ## Watching for changes
 
