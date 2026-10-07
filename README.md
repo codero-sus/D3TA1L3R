@@ -349,6 +349,12 @@ finding, and the parser is strict on purpose:
   `al***@example.com` unless you pass `--include-values`; either way, nothing is
   written to disk.
 
+The dashboard has the same feature on the main page, behind a checkbox: the
+*Review identity* button is disabled until you tick it, the reviewed findings and
+their measured confidence appear side by side with the verdict and the reason,
+and a disagreement with a strong finding is marked in place. Verdicts are written
+into the page as text, never as HTML.
+
 What this is *not*: proof of ownership. It cannot distinguish you from a
 namesake with a similar profile, and a wrong "looks like you" is more likely
 than a wrong finding. A cryptographic check — a DNS `TXT` record, a `rel=me`

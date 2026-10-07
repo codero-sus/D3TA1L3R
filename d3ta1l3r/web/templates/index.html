@@ -249,6 +249,43 @@
     <div id="ask-answer" class="ask-answer" hidden></div>
     <div id="ask-setup" class="fineprint"></div>
   </div>
+
+  <div class="panel">
+    <h3>Verify which findings are really you <span class="badge low">optional</span></h3>
+    <p class="fineprint">
+      A scan can tell that a page exists; it cannot tell whether the account is yours.
+      Tick the box and the local model will give a second opinion on each finding —
+      <code>MINE</code>, <code>NOT_MINE</code> or <code>UNSURE</code>. This never runs on
+      its own: not during a scan, not during a breach check, not when you ask a question.
+      A verdict is an opinion kept beside the measured confidence — it cannot raise it —
+      and it is not proof of ownership. Check the URL before you act on one.
+    </p>
+    <div class="fields">
+      <label>Facts the model may use
+        <input type="text" id="verify-facts" autocomplete="off"
+               placeholder="my bios mention chess · I lived in Berlin until 2024">
+      </label>
+    </div>
+    <label class="check">
+      <input type="checkbox" id="verify-enabled">
+      I want the local model to judge these findings
+    </label>
+    <label class="check">
+      <input type="checkbox" id="verify-only-uncertain" checked>
+      Only the uncertain ones
+      <span class="hint">(skips findings already measured confirmed/high)</span>
+    </label>
+    <label class="check">
+      <input type="checkbox" id="verify-include-values">
+      Send raw identifiers
+      <span class="hint">(off: the model sees masked values like al***@example.com)</span>
+    </label>
+    <div class="actions">
+      <button id="verify-submit" type="button" disabled>Review identity</button>
+      <span class="status" id="verify-status">tick the box above to enable this</span>
+    </div>
+    <div id="verify-result" hidden></div>
+  </div>
 </section>
 
 <section>

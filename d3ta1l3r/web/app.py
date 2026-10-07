@@ -78,6 +78,7 @@ from ..llm import (
     build_context,
     model_doctor,
     select_backend,
+    verify_findings,
 )
 from ..models import Confidence, ScanEvent, ScanReport, ScanTarget
 from ..sources.probe import load_site_specs
@@ -238,6 +239,24 @@ class AskRequest(BaseModel):
     backend: str = ""  # "" = whatever the dashboard was started with
     max_findings: int | None = Field(default=None, ge=1, le=200)
     reset: bool = False
+
+
+class VerifyRequest(BaseModel):
+    """Body of ``POST /api/verify``.
+
+    This endpoint exists so that verification happens *because someone pressed a
+    button*. Nothing on the dashboard calls it during a scan, a breach run or an
+    ordinary question; the same rules as the CLI apply — a local model, verdicts
+    that never touch the measured confidence, and an error rather than a fake
+    review when no model is installed.
+    """
+
+    scans: list[str] = Field(default_factory=list)
+    limit: int = Field(default=3, ge=1, le=25)
+    verify_limit: int = Field(default=12, ge=1, le=60)
+    only_uncertain: bool = False
+    include_values: bool = False
+    facts: str = Field(default="", max_length=400)
 
 
 @dataclass
@@ -891,6 +910,49 @@ def create_app(settings: AppSettings | None = None) -> FastAPI:
         key = hashlib.sha256(token.encode()).hexdigest()[:16]
         session = chats.pop(key, None)
         return {"reset": session is not None, "turns": 0}
+
+    @app.post("/api/verify")
+    async def api_verify(payload: VerifyRequest, request: Request) -> JSONResponse:
+        """Ask the local model to judge who is who — only when called explicitly."""
+        if not _signed_in(request):
+            raise HTTPException(status_code=401, detail="sign in to use the dashboard")
+        wanted = payload.scans or [meta.scan_id for meta in store.list(limit=payload.limit)]
+        reports = [report for scan_id in wanted if (report := store.load(scan_id)) is not None]
+        if not reports:
+            raise HTTPException(
+                status_code=422, detail="there is no scan to review yet — run one first"
+            )
+        try:
+            backend, notes = select_backend(
+                prefer=settings.chat_backend,
+                model_path=settings.chat_model_path,
+                ollama_model=settings.ollama_model,
+                ollama_host=settings.ollama_host,
+            )
+        except (UsageError, D3ta1l3rError) as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        if not backend.is_model:
+            # A page of "cannot tell" would look like a completed review, so refuse.
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "identity verification needs a local model and none is available here. "
+                    "Install llama-cpp-python and pull a model, or run Ollama on this "
+                    "machine — nothing was judged."
+                ),
+            )
+        result = verify_findings(
+            reports,
+            backend,
+            about=payload.facts.strip(),
+            include_values=payload.include_values,
+            only_uncertain=payload.only_uncertain,
+            limit=payload.verify_limit,
+            notes=notes,
+        )
+        body = result.to_dict()
+        body["stored_to_disk"] = False
+        return JSONResponse(body)
 
     # -- watchlist (vault) -----------------------------------------------
     @app.get("/api/vault")
