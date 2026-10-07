@@ -13,6 +13,7 @@ from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, ClassVar
 
+from .core.browser import BrowserProfile, resolve_profile
 from .errors import ConfigError
 
 __all__ = ["DEFAULT_USER_AGENT", "RateLimitConfig", "ScanConfig"]
@@ -85,6 +86,21 @@ class ScanConfig:
 
     user_agent: str = field(default_factory=DEFAULT_USER_AGENT)
 
+    browser_profile: str = "off"
+    """Send browser-shaped navigation headers (``chrome``/``firefox``/``safari``/
+    ``edge``), or ``off`` for the tool's own User-Agent.
+
+    Off by default: the tool identifying itself is the honest baseline, and a
+    scan that changes its story should be a deliberate choice. See
+    :mod:`d3ta1l3r.core.browser` for what this does and does not do — it is not
+    a fingerprint forge, it rotates nothing, and robots.txt and the rate limiter
+    apply exactly the same either way.
+    """
+
+    contact_email: str = field(default_factory=lambda: os.environ.get(_CONTACT_ENV, "").strip())
+    """Ride-along contact address, sent as ``From:`` when a browser profile hides
+    the tool's own User-Agent. Empty unless ``D3TA1L3R_UA_EMAIL`` is set."""
+
     # -- politeness ------------------------------------------------------
     rate: RateLimitConfig = field(default_factory=RateLimitConfig)
     respect_robots: bool = True
@@ -140,6 +156,9 @@ class ScanConfig:
             raise ConfigError("max_redirects must be >= 0")
         if not self.user_agent.strip():
             raise ConfigError("user_agent must not be empty")
+        resolve_profile(self.browser_profile)  # raises ConfigError on an unknown name
+        if self.contact_email and "@" not in self.contact_email:
+            raise ConfigError("contact_email must look like an address")
         if self.max_sites is not None and self.max_sites < 1:
             raise ConfigError("max_sites must be >= 1 when set")
         if self.cache_ttl < 0:
@@ -156,6 +175,11 @@ class ScanConfig:
         self.rate.validate()
 
     # -- helpers ---------------------------------------------------------
+    @property
+    def profile(self) -> BrowserProfile | None:
+        """The resolved browser profile, or ``None`` when the tool introduces itself."""
+        return resolve_profile(self.browser_profile)
+
     def replaced(self, **changes: Any) -> ScanConfig:
         """Return a copy with overrides applied and re-validated."""
         return replace(self, **changes)
@@ -176,7 +200,8 @@ class ScanConfig:
 
         Recognised variables: ``D3TA1L3R_TIMEOUT``, ``D3TA1L3R_CONCURRENCY``,
         ``D3TA1L3R_RPS``, ``D3TA1L3R_CACHE_DIR``, ``D3TA1L3R_ROBOTS`` (0/1),
-        ``D3TA1L3R_UA_EMAIL`` (feeds the User-Agent contact string).
+        ``D3TA1L3R_UA_EMAIL`` (the contact address, in the User-Agent and as
+        ``From:``), ``D3TA1L3R_BROWSER`` (a browser profile name, or ``off``).
         """
         rate = RateLimitConfig()
         if (raw := os.environ.get("D3TA1L3R_CONCURRENCY")) is not None:
@@ -192,6 +217,8 @@ class ScanConfig:
             values["use_cache"] = True
         if (raw := os.environ.get("D3TA1L3R_ROBOTS")) is not None:
             values["respect_robots"] = raw.strip().lower() not in {"0", "false", "no", "off"}
+        if (raw := os.environ.get("D3TA1L3R_BROWSER")) is not None:
+            values["browser_profile"] = raw.strip() or "off"
         values.update(overrides)
         return cls(**values)
 

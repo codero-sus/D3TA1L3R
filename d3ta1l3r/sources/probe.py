@@ -44,6 +44,7 @@ from urllib.parse import quote, urlsplit
 from ..errors import ConfigError
 from ..models import Confidence, ScanStatus, ScanTarget, SourceKind, SourceOutcome
 from .base import BaseSource, SourceMeta, classify_status
+from .notfound import classify_page
 
 __all__ = ["SiteSpec", "UsernameProbeSource", "load_site_specs", "specs_from_dicts"]
 
@@ -211,13 +212,29 @@ class UsernameProbeSource(BaseSource):
         body = response.text
         lowered = body.lower()
 
-        if self.spec.not_found_marker and self.spec.not_found_marker.lower() in lowered:
+        # The site's own phrase first (better evidence), then the generic registry
+        # in notfound.py — "User Not Found", "doesn't exist", "no such user" and
+        # friends. An ambiguous phrase (private profile, bot check, suspended
+        # account) is a gap, never a confident "not found".
+        verdict = classify_page(
+            body, markers=tuple(filter(None, (self.spec.not_found_marker,)))
+        )
+        if verdict is not None and verdict.certain:
+            label = (
+                "the not-found signature"
+                if self.spec.not_found_marker
+                and verdict.phrase == self.spec.not_found_marker.lower()
+                else "the not-found phrase"
+            )
             return outcome(
                 ScanStatus.NOT_FOUND,
-                error=(
-                    f"HTTP {http_status} but page contains the not-found signature "
-                    f"{self.spec.not_found_marker!r}"
-                ),
+                error=f"HTTP {http_status} but {label} {verdict.phrase!r} matches",
+            )
+        if verdict is not None and not verdict.certain:
+            return outcome(
+                ScanStatus.BLOCKED,
+                error=f"HTTP {http_status} but {verdict.evidence}",
+                skipped_reason="ambiguous page",
             )
 
         if self.spec.found_marker and self.spec.found_marker.lower() in lowered:
