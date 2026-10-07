@@ -55,7 +55,15 @@ from .core.engine import ScanEngine
 from .core.report import diff_reports, render_html, render_json, render_markdown
 from .core.storage import ScanStore
 from .errors import D3ta1l3rError, UsageError
-from .llm import ChatSession, build_context, model_doctor, select_backend
+from .llm import (
+    ChatSession,
+    build_context,
+    model_doctor,
+    select_backend,
+    verify_findings,
+)
+from .llm import models as model_catalog
+from .llm.verify import render_verification_markdown
 from .models import (
     EVENT_SCAN_FINISHED,
     EVENT_SOURCE_FINISHED,
@@ -377,8 +385,9 @@ def build_parser() -> argparse.ArgumentParser:
     ask.add_argument("--backend", choices=("auto", "llama_cpp", "ollama", "extractive"),
                      default="auto",
                      help="which local backend to use (default: auto, best available)")
-    ask.add_argument("--model", metavar="PATH",
-                     help="GGUF file to load with llama-cpp-python")
+    ask.add_argument("--model", metavar="PATH|ID|auto",
+                     help="GGUF file, a catalogue id, repo/file.gguf, or 'auto' for the "
+                          "largest downloaded model that fits")
     ask.add_argument("--ollama-model", default="llama3.2:1b", metavar="NAME",
                      help="Ollama model name (default llama3.2:1b)")
     ask.add_argument("--ollama-host", default="http://127.0.0.1:11434", metavar="URL",
@@ -397,6 +406,22 @@ def build_parser() -> argparse.ArgumentParser:
                      help="send raw identifiers to the model (default: masked)")
     ask.add_argument("--yes", "-y", action="store_true",
                      help="do not print the masking note (for scripts)")
+    ask.add_argument(
+        "--verify", action="store_true",
+        help="ask the local model to judge whether each finding is really you "
+             "(opt-in; the measured confidence is never changed)",
+    )
+    ask.add_argument("--about", default="", metavar="TEXT",
+                     help="facts only you know, to help the reviewer: e.g. "
+                          "'my bios mention chess and Delhi'")
+    ask.add_argument("--about-file", type=Path, metavar="FILE",
+                     help="read --about from a file")
+    ask.add_argument("--only-uncertain", action="store_true",
+                     help="with --verify: skip findings already at confirmed/high confidence")
+    ask.add_argument("--verify-limit", type=int, default=None, metavar="N",
+                     help="with --verify: judge at most N findings (a small model is slow)")
+    ask.add_argument("--verify-markdown", action="store_true",
+                     help="with --verify: print the review as Markdown")
     ask.add_argument("--list-models", action="store_true",
                      help="show which backends work here and what fits in 4 GB, then exit")
     ask.add_argument("--json", action="store_true", help="print the answer as JSON")
@@ -405,6 +430,65 @@ def build_parser() -> argparse.ArgumentParser:
     ask.add_argument("--passphrase-file", metavar="FILE",
                      help="read the vault passphrase from this file instead of prompting")
     ask.add_argument("--demo", action="store_true", help="mark demo reports in the digest")
+    models = sub.add_parser(
+        "models",
+        help="list, add and download GGUF models (Hugging Face), sized for this machine",
+        description=(
+            "A curated catalogue that works offline, plus download and search against "
+            "Hugging Face. Nothing is downloaded without being asked for by name."
+        ),
+    )
+    models_sub = models.add_subparsers(dest="models_command", required=True)
+
+    list_cmd = models_sub.add_parser("list", help="show the catalogue")
+    list_cmd.add_argument("--search", default="", help="substring filter")
+    list_cmd.add_argument("--fits-memory", action="store_true",
+                          help="only models that fit this machine's RAM")
+    list_cmd.add_argument("--powerful", action="store_true",
+                          help="only the larger, higher-quality models")
+    list_cmd.add_argument("--tag", default="", help="filter by tag, e.g. reasoning, 4gb")
+    list_cmd.add_argument("--downloaded", action="store_true",
+                          help="only models already downloaded here")
+    list_cmd.add_argument("--json", action="store_true")
+
+    search_cmd = models_sub.add_parser("search", help="search Hugging Face for GGUF repos")
+    search_cmd.add_argument("query")
+    search_cmd.add_argument("--limit", type=int, default=10)
+    search_cmd.add_argument("--json", action="store_true")
+
+    add_cmd = models_sub.add_parser(
+        "add", help="add any GGUF on Hugging Face to your catalogue (e.g. a bigger model)"
+    )
+    add_cmd.add_argument("reference", help="REPO/FILE.gguf, e.g. owner/repo/model-Q4_K_M.gguf")
+    add_cmd.add_argument("--repo", default="", help="repository, if given separately")
+    add_cmd.add_argument("--filename", default="", help="file inside the repo, if separate")
+    add_cmd.add_argument("--id", default="", help="short id to pull it by")
+    add_cmd.add_argument("--name", default="")
+    add_cmd.add_argument("--parameters", default="", help="e.g. 7B")
+    add_cmd.add_argument("--quant", default="", help="e.g. Q4_K_M")
+    add_cmd.add_argument("--size-mb", type=int, default=0, help="download size, if known")
+    add_cmd.add_argument("--ram-mb", type=int, default=0, help="RAM it needs, if known")
+    add_cmd.add_argument("--context-size", type=int, default=4096, help="model context window")
+    add_cmd.add_argument("--license", default="", help="e.g. apache-2.0, llama3.1")
+    add_cmd.add_argument("--tag", action="append", default=[], help="free-form tag (repeatable)")
+    add_cmd.add_argument("--note", default="")
+    add_cmd.add_argument("--revision", default="main")
+
+    remove_cmd = models_sub.add_parser("remove", help="delete a downloaded model")
+    remove_cmd.add_argument("model_id")
+    remove_cmd.add_argument("--yes", "-y", action="store_true")
+    remove_cmd.add_argument("--catalogue-only", action="store_true",
+                            help="drop the custom catalogue entry, keep the file")
+
+    pull_cmd = models_sub.add_parser("pull", help="download a model from Hugging Face")
+    pull_cmd.add_argument("model", help="catalogue id, or repo/filename.gguf")
+    pull_cmd.add_argument("--yes", "-y", action="store_true", help="do not ask first")
+    pull_cmd.add_argument("--force", action="store_true", help="download even if present")
+    pull_cmd.add_argument("--no-verify", dest="verify", action="store_false", default=True,
+                          help="skip the length/SHA-256 check")
+
+    path_cmd = models_sub.add_parser("path", help="where models live, and how much space is free")
+    path_cmd.add_argument("--json", action="store_true")
     return parser
 
 
@@ -431,6 +515,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             return cmd_breach(args)
         if args.command == "ask":
             return cmd_ask(args)
+        if args.command == "models":
+            return cmd_models(args)
     except UsageError as exc:
         print(f"error: {exc}", file=sys.stderr)
         return EXIT_USAGE
@@ -1356,6 +1442,251 @@ def _print_breach(
 
 
 # ---------------------------------------------------------------------------
+# models (local catalogue + Hugging Face downloads)
+# ---------------------------------------------------------------------------
+def cmd_models(args: argparse.Namespace) -> int:
+    """List, search, add and download local models.
+
+    The catalogue is curated and ships with the tool, so `models list` works on a
+    machine with no network. `models search` and `models pull` are the only parts
+    that talk to Hugging Face, and a download is never implicit: the URL and size
+    are printed before the first byte is requested.
+    """
+    action = args.models_command
+    if action == "path":
+        return _models_path(args)
+    if action == "list":
+        return _models_list(args)
+    if action == "search":
+        return _models_search(args)
+    if action == "add":
+        return _models_add(args)
+    if action == "remove":
+        return _models_remove(args)
+    if action == "pull":
+        return _models_pull(args)
+    raise UsageError(f"unknown models command: {action}")
+
+
+def _models_path(args: argparse.Namespace) -> int:
+    directory = model_catalog.default_models_dir()
+    disk = model_catalog.describe_disk(directory)
+    if getattr(args, "json", False):
+        print(json.dumps(disk, indent=2))
+        return EXIT_OK
+    print(f"models directory: {disk['directory']}")
+    print(f"  exists: {'yes' if disk['exists'] else 'no'}")
+    if disk["free_mb"] >= 0:
+        print(f"  free space: {model_catalog.format_mb(disk['free_mb'])}")
+    ram = disk.get("ram_mb")
+    print(f"  RAM: {model_catalog.format_mb(ram) if ram else 'unknown on this platform'}")
+    print(f"  custom catalogue: {model_catalog.custom_catalog_path(directory)}")
+    print("Set D3TA1L3R_MODELS to keep the models somewhere else.")
+    return EXIT_OK
+
+
+def _models_list(args: argparse.Namespace) -> int:
+    directory = model_catalog.default_models_dir()
+    downloaded = {row["id"] for row in model_catalog.list_downloaded(directory)}
+    specs = model_catalog.filter_models(
+        getattr(args, "search", "") or "",
+        fits_mb=(getattr(args, "fits_memory", False) and model_catalog.local_ram_mb()) or None,
+        tag=getattr(args, "tag", "") or "",
+        powerful_only=bool(getattr(args, "powerful", False)),
+        downloaded_dir=directory if getattr(args, "downloaded", False) else None,
+    )
+    payload = [
+        {**spec.to_dict(), "downloaded": spec.id in downloaded,
+         "path": str(model_catalog.model_path(spec, directory))}
+        for spec in specs
+    ]
+    if getattr(args, "json", False):
+        print(json.dumps(payload, indent=2))
+        return EXIT_OK
+    if not payload:
+        print("nothing in the catalogue matches that filter.")
+        return EXIT_OK
+    ram = model_catalog.local_ram_mb()
+    print(f"{len(payload)} model(s)"
+          f"{f' · this machine has {model_catalog.format_mb(ram)} of RAM' if ram else ''}\n")
+    for row in payload:
+        mark = "*" if row["downloaded"] else " "
+        fit = "fits here" if ram and row["ram_mb"] <= ram else (
+            "may not fit" if ram and not row["fits_4gb"] else "4 GB")
+        print(f" {mark} {row['id']:<40} {row['parameters']:>5} {row['quant']:<9}"
+              f" {model_catalog.format_mb(row['size_mb']):>8} download"
+              f" · {model_catalog.format_mb(row['ram_mb']):>8} RAM · {fit}")
+        print(f"     {row['name']} — {row['note']}")
+        print(f"     {row['url']}")
+    print("\n* = already downloaded. `d3ta1l3r models pull <id>` fetches one;")
+    print("`d3ta1l3r ask --model auto` uses the largest downloaded model that fits.")
+    return EXIT_OK
+
+
+def _models_search(args: argparse.Namespace) -> int:
+    rows = model_catalog.hf_search(args.query, limit=args.limit)
+    if getattr(args, "json", False):
+        print(json.dumps(rows, indent=2))
+        return EXIT_OK
+    if not rows:
+        print(f"no GGUF repositories matched {args.query!r}")
+        return EXIT_OK
+    print(f"{len(rows)} Hugging Face repository(ies) matching {args.query!r}:\n")
+    for row in rows:
+        flags = " [gated]" if row["gated"] else ""
+        print(f"  {row['repo']}{flags}")
+        print(f"     {row['downloads']} downloads · {row['likes']} likes · updated {row['updated']}")
+        print(f"     {row['url']}")
+    print("\nAdd one of these with:")
+    print("  d3ta1l3r models add REPO/FILE.gguf --ram MB && d3ta1l3r models pull <id>")
+    return EXIT_OK
+
+
+def _models_add(args: argparse.Namespace) -> int:
+    spec = model_catalog.spec_from_reference(
+        args.reference,
+        repo=args.repo or "",
+        filename=args.filename or "",
+        model_id=args.id or "",
+        name=args.name or "",
+        parameters=args.parameters or "",
+        quant=args.quant or "unknown",
+        size_mb=args.size_mb or 0,
+        ram_mb=args.ram_mb or 0,
+        context=args.context_size,
+        license=args.license or "unknown",
+        tags=tuple(_split_values(args.tag or [])),
+        note=args.note or "",
+        revision=args.revision,
+    )
+    path = model_catalog.save_custom_model(spec)
+    print(f"added to the catalogue: {spec.id}")
+    print(f"  {spec.name}")
+    print(f"  {spec.url}")
+    if spec.ram_mb:
+        print(f"  estimated RAM: {model_catalog.format_mb(spec.ram_mb)}")
+    else:
+        print("  estimated RAM: unknown until it is measured at download time")
+    print(f"  catalogue: {path}")
+    print(f"\nnext: d3ta1l3r models pull {spec.id}")
+    return EXIT_OK
+
+
+def _models_remove(args: argparse.Namespace) -> int:
+    directory = model_catalog.default_models_dir()
+    removed_entry = model_catalog.remove_custom_model(args.model_id, directory)
+    path = model_catalog.model_path(
+        model_catalog.ModelSpec(
+            id=args.model_id, name="", repo="", filename="", parameters="", quant="",
+            size_mb=0, ram_mb=0,
+        ),
+        directory,
+    )
+    removed_file = False
+    if path.is_file() and not args.catalogue_only:
+        if not args.yes:
+            answer = input(f"delete {path} ({model_catalog.format_bytes(path.stat().st_size)})? [y/N] ")
+            if answer.strip().lower() not in {"y", "yes"}:
+                print("left the file alone.")
+                if removed_entry:
+                    print("removed the catalogue entry only.")
+                return EXIT_OK
+        path.unlink()
+        removed_file = True
+    if not removed_entry and not removed_file:
+        raise UsageError(f"nothing called {args.model_id!r} in the catalogue or on disk")
+    if removed_entry:
+        print(f"removed {args.model_id} from the custom catalogue")
+    if removed_file:
+        print(f"deleted {path}")
+    if not removed_entry and not removed_file:  # pragma: no cover - unreachable
+        return EXIT_FAILURE
+    return EXIT_OK
+
+
+def _models_pull(args: argparse.Namespace) -> int:
+    directory = model_catalog.default_models_dir()
+    specs = model_catalog.catalogue(directory)
+    spec = model_catalog.find_model(args.model, specs=specs)
+    if spec is None:
+        matches = model_catalog.filter_models(args.model, specs=specs, fits_mb=None)[:5]
+        hint = (
+            " Did you mean: " + ", ".join(item.id for item in matches) + "?"
+            if matches
+            else " Run `d3ta1l3r models list` to see the catalogue."
+        )
+        raise UsageError(f"no model called {args.model!r} in the catalogue.{hint}")
+
+    final = model_catalog.model_path(spec, directory)
+    if final.is_file() and not args.force:
+        print(f"already downloaded: {final}")
+        print("Use --force to fetch it again.")
+        return EXIT_OK
+
+    disk = model_catalog.describe_disk(directory)
+    ram = disk.get("ram_mb")
+    print(f"{spec.name} ({spec.parameters}, {spec.quant})")
+    print(f"  from:   {spec.url}")
+    print(f"  size:   {model_catalog.format_mb(spec.size_mb or 0)}"
+          f"{' (as published)' if spec.size_mb else ' (measured at download time)'}")
+    print(f"  to:     {final}")
+    if disk["free_mb"] >= 0 and spec.size_mb:
+        needed = spec.size_mb * 1024 * 1024
+        free = disk["free_mb"] * 1024 * 1024
+        if needed > free:
+            raise UsageError(
+                f"not enough disk: {model_catalog.format_mb(spec.size_mb)} needed, "
+                f"{model_catalog.format_mb(disk['free_mb'])} free in {directory}"
+            )
+        print(f"  disk:   {model_catalog.format_mb(disk['free_mb'])} free (ok)")
+    if ram and spec.ram_mb > ram:
+        print(f"  warning: this needs about {model_catalog.format_mb(spec.ram_mb)} of RAM "
+              f"and this machine has {model_catalog.format_mb(ram)} — it will download, "
+              "but loading it may fail or swap.")
+    if not args.yes:
+        print("\nDownload it? [y/N] ", end="", flush=True)
+        answer = input().strip().lower()
+        if answer not in {"y", "yes"}:
+            print("nothing downloaded.")
+            return EXIT_OK
+
+    def progress(phase: str, done: int, total: int) -> None:
+        if phase == "done":
+            print(f"\rdownloaded {model_catalog.format_bytes(done)}" + " " * 20)
+            return
+        if total > 0:
+            percent = done / total * 100
+            print(
+                f"\r{phase}: {model_catalog.format_bytes(done)} / "
+                f"{model_catalog.format_bytes(total)} ({percent:.0f}%)",
+                end="",
+                flush=True,
+            )
+        else:
+            print(f"\r{phase}: {model_catalog.format_bytes(done)}", end="", flush=True)
+
+    expected = ""
+    if args.verify and spec.official:
+        with contextlib.suppress(UsageError):  # metadata is a bonus, not a gate
+            meta = model_catalog.hf_file_metadata(spec)
+            expected = meta.get("sha256", "")
+            if not spec.size_mb and meta.get("size"):
+                print(f"  size:   {model_catalog.format_bytes(meta['size'])} (from the Hub)")
+
+    path = model_catalog.download_model(
+        spec,
+        directory,
+        progress=progress,
+        verify=args.verify,
+        force=args.force,
+        expected_sha256=expected,
+    )
+    print(f"\nmodel ready: {path}")
+    print(f"  use it with: d3ta1l3r ask --model {path} \"what should I fix first?\"")
+    return EXIT_OK
+
+
+# ---------------------------------------------------------------------------
 # ask (local model, optional)
 # ---------------------------------------------------------------------------
 def cmd_ask(args: argparse.Namespace) -> int:
@@ -1370,10 +1701,10 @@ def cmd_ask(args: argparse.Namespace) -> int:
     """
     if getattr(args, "list_models", False):
         return _ask_models()
-    if not args.question:
+    if not args.question and not getattr(args, "verify", False):
         raise UsageError(
             "ask a question: d3ta1l3r ask \"what should I fix first?\"  "
-            "(use --list-models to see what fits in 4 GB)"
+            "(use --list-models to see what fits in 4 GB, or --verify to review findings)"
         )
 
     reports, watchlist, breach = _ask_sources(args)
@@ -1385,7 +1716,7 @@ def cmd_ask(args: argparse.Namespace) -> int:
 
     backend, notes = select_backend(
         prefer=args.backend,
-        model_path=Path(args.model).expanduser() if args.model else None,
+        model_path=_resolve_model_argument(args),
         ollama_model=args.ollama_model,
         ollama_host=args.ollama_host,
         threads=args.threads,
@@ -1416,6 +1747,9 @@ def cmd_ask(args: argparse.Namespace) -> int:
             file=sys.stderr,
         )
 
+    if getattr(args, "verify", False):
+        return _run_verification(args, reports, backend, notes, include_values)
+
     session = ChatSession(context, backend, notes=notes, context_chars=args.context_chars)
     answer = session.ask(args.question)
     if args.json:
@@ -1433,6 +1767,119 @@ def cmd_ask(args: argparse.Namespace) -> int:
             f"in {answer.elapsed_ms} ms. Nothing was written to disk.",
             file=sys.stderr,
         )
+    return EXIT_OK
+
+
+def _resolve_model_argument(args: argparse.Namespace) -> Path | None:
+    """Turn ``--model`` into a GGUF path.
+
+    Accepts a path, a catalogue id, ``repo/filename.gguf``, or ``auto`` — which
+    picks the largest *downloaded* model that fits this machine, because the
+    user downloaded it deliberately and a 7B answer beats a 1.1B one when the
+    memory is there.
+    """
+    raw = (getattr(args, "model", None) or "").strip()
+    if not raw:
+        return None
+    if raw.lower() in {"auto", "downloaded"}:
+        chosen = model_catalog.resolve_downloaded_model()
+        if chosen is None:
+            print(
+                "note: no downloaded model fits this machine; run "
+                "`d3ta1l3r models list --fits-memory` and `d3ta1l3r models pull <id>`.",
+                file=sys.stderr,
+            )
+        return chosen
+    candidate = Path(raw).expanduser()
+    if candidate.is_file() or candidate.suffix.lower() == ".gguf" or os.sep in raw:
+        return candidate
+    spec = model_catalog.find_model(raw)
+    if spec is not None:
+        path = model_catalog.model_path(spec)
+        if not path.is_file():
+            raise UsageError(
+                f"{spec.id} is in the catalogue but not downloaded yet — "
+                f"run `d3ta1l3r models pull {spec.id}`"
+            )
+        return path
+    raise UsageError(
+        f"no model called {raw!r}: it is not a file, not a catalogue id. "
+        "Try `d3ta1l3r models list`."
+    )
+
+
+def _run_verification(
+    args: argparse.Namespace,
+    reports: list[ScanReport],
+    backend: Any,
+    notes: list[str],
+    include_values: bool,
+) -> int:
+    """The opt-in identity review: model opinions, never evidence."""
+    if any(report.demo for report in reports):
+        print(
+            "note: some reports are demo runs — verdicts about synthetic accounts say "
+            "nothing about a real person.",
+            file=sys.stderr,
+        )
+    about = args.about
+    if args.about_file:
+        try:
+            about = args.about_file.expanduser().read_text(encoding="utf-8").strip()
+        except OSError as exc:
+            raise UsageError(f"could not read {args.about_file}: {exc}") from exc
+    for note in notes:
+        print(f"note: {note}", file=sys.stderr)
+    if not backend.is_model:
+        # Refusing beats "reviewing" with a keyword search: a page of "cannot tell"
+        # lines looks like a review that found nothing, which is a different claim
+        # from "no model was installed to do the reviewing".
+        raise UsageError(
+            "identity verification needs a model, and none is available here. "
+            "Download one (`d3ta1l3r models list --fits-memory`, then "
+            "`d3ta1l3r models pull <id>` with llama-cpp-python installed) or run "
+            "Ollama on this machine. Nothing was judged."
+        )
+    print(
+        f"reviewing with {backend.name} ({backend.model_id}); identifiers "
+        f"{'included raw' if include_values else 'masked'}",
+        file=sys.stderr,
+    )
+
+    result = verify_findings(
+        reports,
+        backend,
+        about=about,
+        include_values=include_values,
+        limit=args.verify_limit,
+        only_uncertain=args.only_uncertain,
+        notes=notes,
+    )
+    if args.json:
+        print(json.dumps(result.to_dict(), indent=2))
+        return EXIT_OK
+    if args.verify_markdown:
+        print(render_verification_markdown(result))
+        return EXIT_OK
+
+    tally = result.tally()
+    if not result.verdicts:
+        print("Nothing to review: the selected scans have no findings.")
+        return EXIT_OK
+    print(f"Identity review · model {result.model or 'unknown'} ({result.backend})")
+    print(f"  {tally.considered} finding(s): {tally.mine} look like you · "
+          f"{tally.not_mine} probably not you · {tally.unsure} cannot tell\n")
+    for verdict in result.verdicts:
+        mark = {"mine": "=", "not_mine": "x", "unsure": "?"}[verdict.verdict.value]
+        flag = "  <- disagrees with a strong finding" if verdict.disagrees_with_evidence else ""
+        print(f"  [{mark}] {verdict.finding_id}  {verdict.measured_confidence or '?':<9} "
+              f"{verdict.verdict.label:<16} {(verdict.reason or '—')[:80]}{flag}")
+    print(
+        "\nA model opinion, not a detection: the measured confidence is unchanged. "
+        "Check the URL\nbefore acting on a verdict, especially a 'looks like you'."
+    )
+    if tally.unparsed:
+        print(f"  {tally.unparsed} line(s) did not parse and were recorded as \"cannot tell\".")
     return EXIT_OK
 
 

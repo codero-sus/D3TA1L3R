@@ -45,26 +45,52 @@ from .backends import (
 from .chat import Answer, ChatSession
 from .cite import CitationReport, extract_citations, verify_citations
 from .context import ContextItem, ScanContext, build_context
+from .models import (
+    CATALOG,
+    ModelSpec,
+    default_models_dir,
+    download_model,
+    hf_search,
+    list_downloaded,
+)
 from .prompt import SYSTEM_PROMPT, build_messages
+from .verify import (
+    FindingVerdict,
+    Verdict,
+    VerificationResult,
+    parse_verdicts,
+    verify_findings,
+)
 
 __all__ = [
     "BACKENDS",
+    "CATALOG",
     "SYSTEM_PROMPT",
     "Answer",
     "ChatSession",
     "CitationReport",
     "ContextItem",
     "ExtractiveBackend",
+    "FindingVerdict",
     "LLMBackend",
     "LlamaCppBackend",
+    "ModelSpec",
     "OllamaBackend",
     "ScanContext",
+    "Verdict",
+    "VerificationResult",
     "backend_status",
     "build_context",
     "build_messages",
+    "default_models_dir",
+    "download_model",
     "extract_citations",
+    "hf_search",
+    "list_downloaded",
     "model_doctor",
+    "parse_verdicts",
     "recommend_models",
     "select_backend",
     "verify_citations",
+    "verify_findings",
 ]

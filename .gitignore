@@ -24,6 +24,10 @@ scans/
 .cache/
 *.d3ta1l3r.json
 
+# --- Model weights (fetched by `d3ta1l3r models pull`, never committed) ---
+*.gguf
+*.gguf.part
+
 # --- Editors / OS ---
 .idea/
 .vscode/

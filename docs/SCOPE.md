@@ -123,6 +123,68 @@ personal data could travel, so the rules are explicit:
 - **The transcript is not a document.** Conversations are held in memory per
   session and dropped on logout or exit. Chat is not evidence: the reports are.
 
+## 2c. Which weights, and who decided to fetch them
+
+The catalogue exists so that "use a bigger model" does not mean "run an
+unlabelled blob". Downloads are deliberately dull:
+
+- **Nothing downloads itself.** The catalogue — size, resident memory, context
+  window, licence and the repository each file comes from — is printed *before*
+  any transfer, and `models pull <id>` states the download size and asks for
+  confirmation first. `--yes` exists for scripts; no default is ever yes.
+- **One host, one purpose.** `huggingface.co` appears only as a file host for
+  GGUF downloads and the search/metadata API that describes them. It is not an
+  inference endpoint: the model is fetched once and then loaded from disk by
+  `llama-cpp-python`, and no question ever leaves the machine. The ban in §2b on
+  hosted inference endpoints stands unchanged.
+- **No keys required.** The curated entries are public. `HF_TOKEN` is used only
+  if it is already in your environment (for gated repositories you added
+  yourself); without it, the tool still works and says what it could not reach.
+- **Integrity, then trust.** A finished download must match the byte length —
+  and, when the repository reports one, the SHA-256 — from the source. A mismatch
+  is deleted rather than loaded, a truncated file keeps its `.part` marker and is
+  never treated as complete, and a response that is an HTML page instead of a
+  model is rejected with that reason.
+- **Resumable, not restarting.** An interrupted download resumes with a single
+  `Range` request; if the server ignores the range and sends the whole file, the
+  download restarts from zero instead of corrupting the result.
+- **You can point it anywhere.** `models add` takes any GGUF reference on Hugging
+  Face, including models this project has never heard of — the licence and
+  provenance you record are what the report shows.
+- **Nothing is redistributed.** This repository ships no weights. What you
+  download is governed by the licence printed next to it, not by this project's
+  licence.
+
+## 2d. "Is this really me?" — an opinion, on request only
+
+A scan can measure that a page exists; it cannot know the account is yours. The
+one feature that tries to answer that question is fenced accordingly:
+
+- **Opt-in, per run.** Verification happens only under `ask --verify`. It never
+  runs during `scan`, `web`, `breach`, `diff`, a scheduled re-check, or a plain
+  `ask`; a test asserts that a normal `ask` does not reach the verifier at all.
+- **A verdict is not a measurement.** The model's judgement is stored in a
+  separate field with the model id and its stated reason. It cannot raise a
+  finding's confidence — there is no code path from a verdict back into the
+  measured column — and a `NOT_MINE` against a `confirmed`/`high` finding is
+  flagged as a disagreement instead of silently overruling the scan or the model.
+- **Uncertainty is the default outcome.** The prompt requires `UNSURE` whenever
+  the evidence cannot separate the user from a namesake. Unparseable lines become
+  `UNSURE` and are marked as unparsed, invented finding ids are dropped, and
+  findings the model skipped are recorded as unanswered.
+- **No model, no review.** If no local model is available the command fails and
+  says nothing was judged. Printing a wall of "cannot tell" would look like a
+  review that found nothing.
+- **Masked by default**, like `ask`; `--include-values` is the explicit override,
+  and the fact that raw values were sent is recorded in the result.
+- **Known gap, stated plainly: this is not proof of ownership.** A determined
+  namesake with a similar profile can be called "you", and this project cannot
+  currently distinguish that. Cryptographic ownership proof — a DNS `TXT` record,
+  a `rel=me` link, or a token posted on a profile you control, then fetched and
+  checked by the tool — is the honest way to answer the question, is not
+  implemented, and should not be described as working. Until then, treat every
+  verdict as what it is: a language model's opinion about a URL.
+
 ## 3. Why the limits are where they are
 
 - **Public ≠ fair game.** Publicly reachable data about a person is still
@@ -236,6 +298,10 @@ After a scan:
       good news.
 - [ ] If I used `ask`: I know which backend answered, the raw-values flag was my
       choice, and nothing it said replaces the report it came from.
+- [ ] If I pulled a model: I read the licence and the size before downloading,
+      and I know which repository the file came from.
+- [ ] If I used `--verify`: I chose to run it, I know a `MINE` is an opinion and
+      not proof, and I checked the URL of anything I acted on.
 
 ## 7. Reporting a problem
 

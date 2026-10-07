@@ -44,6 +44,7 @@ class TestReadme:
             "breach",
             "web",
             "ask",
+            "models",
         }
         readme = _read("README.md")
         for command in commands:
@@ -149,6 +150,65 @@ class TestReadme:
 
     def test_license_is_linked(self) -> None:
         assert "[LICENSE](LICENSE)" in _read("README.md")
+
+    def test_downloads_are_documented_as_user_initiated(self) -> None:
+        """The catalogue must be shown, and the licence disclosed, before a fetch."""
+        readme = _read("README.md")
+        scope = _read("docs/SCOPE.md")
+        assert "d3ta1l3r models list" in readme
+        assert "d3ta1l3r models pull" in readme
+        assert "before" in scope.lower() and "licence" in scope.lower()
+        for text in (readme, scope):
+            lowered = text.lower()
+            assert "nothing is downloaded" in lowered or "nothing downloads itself" in lowered
+        # the disclosure has to exist in the catalogue itself, not only in prose
+        from d3ta1l3r.llm import CATALOG
+
+        assert CATALOG, "an empty catalogue would make the docs a lie"
+        for spec in CATALOG:
+            assert spec.license, f"{spec.id} is listed without a licence"
+            assert spec.repo.count("/") == 1, spec.id
+
+    def test_weights_are_never_bundled_with_the_repository(self) -> None:
+        """No .gguf may be committed: the tool downloads them, it does not ship them."""
+        stray = [
+            str(path.relative_to(ROOT))
+            for path in ROOT.rglob("*.gguf")
+            if ".git" not in path.parts
+        ]
+        assert not stray, stray
+        ignore = _read(".gitignore")
+        assert "*.gguf" in ignore or ".gguf" in ignore
+
+    def test_verification_is_documented_as_a_request_only_opinion(self) -> None:
+        readme = _read("README.md")
+        scope = _read("docs/SCOPE.md")
+        assert "--verify" in readme and "--verify" in scope
+        for text in (readme, scope):
+            lowered = text.lower()
+            assert "opt-in" in lowered or "only when you ask" in lowered
+            assert "unsure" in lowered
+            assert "never evidence" in lowered or "not evidence" in lowered
+            assert "proof of ownership" in lowered
+        # and the code really does keep the two claims apart
+        verify = (ROOT / "d3ta1l3r" / "llm" / "verify.py").read_text(encoding="utf-8")
+        assert "confidence = " not in verify.replace("measured_confidence", "")
+
+    def test_the_downloader_is_not_an_inference_client(self) -> None:
+        """huggingface.co is a file host here; no question is ever sent to it."""
+        for name in ("backends.py", "chat.py", "context.py", "cite.py", "prompt.py"):
+            body = (ROOT / "d3ta1l3r" / "llm" / name).read_text(encoding="utf-8").lower()
+            assert "huggingface" not in body, name
+        # every huggingface.co URL in the package goes through the one constant,
+        # so a future change cannot quietly point a backend at a hosted model API
+        urls = []
+        for path in sorted((ROOT / "d3ta1l3r").rglob("*.py")):
+            for number, line in enumerate(
+                path.read_text(encoding="utf-8").splitlines(), start=1
+            ):
+                if "huggingface.co" in line and "HF_HOST = " not in line:
+                    urls.append(f"{path.name}:{number}: {line.strip()}")
+        assert not urls, urls
 
 
 class TestSourceDatabase:
