@@ -300,6 +300,12 @@ and the KV cache is counted with the weights.
 `repo/file.gguf`, or `auto` — which picks the best model that is downloaded *and*
 fits here, and says so when there is none.
 
+If this machine cannot reach `huggingface.co` — a locked-down network, a sandbox,
+a proxy that only allows some hosts — `models pull` says so and stops, leaving a
+`.part` file it can resume from later. `models list` still works (the catalogue is
+local), and a file fetched elsewhere can either be dropped into the models
+directory or pointed at directly: `d3ta1l3r ask --model ~/Downloads/model.gguf`.
+
 What the feature promises, and what the tests pin:
 
 - **It is local, and that is enforced.** `OllamaBackend` raises on any non-loopback
