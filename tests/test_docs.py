@@ -157,6 +157,9 @@ class TestReadme:
         scope = _read("docs/SCOPE.md")
         assert "d3ta1l3r models list" in readme
         assert "d3ta1l3r models pull" in readme
+        # the dashboard offers the same list, and asks before fetching
+        assert "same catalogue on the main page" in readme
+        assert "nothing is fetched by looking at the page" in readme.lower()
         assert "before" in scope.lower() and "licence" in scope.lower()
         for text in (readme, scope):
             lowered = text.lower()

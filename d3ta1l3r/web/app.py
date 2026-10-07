@@ -74,12 +74,14 @@ from ..core.report import render_html, render_json, render_markdown
 from ..core.storage import ScanStore
 from ..errors import D3ta1l3rError, UsageError
 from ..llm import (
+    CATALOG,
     ChatSession,
     build_context,
     model_doctor,
     select_backend,
     verify_findings,
 )
+from ..llm import models as model_catalog
 from ..models import Confidence, ScanEvent, ScanReport, ScanTarget
 from ..sources.probe import load_site_specs
 from ..vault import Vault, VaultError, VaultKind
@@ -241,6 +243,19 @@ class AskRequest(BaseModel):
     reset: bool = False
 
 
+class ModelPullRequest(BaseModel):
+    """Body of ``POST /api/models/pull``.
+
+    ``confirm`` is the "yes" the CLI asks for interactively. A 5 GB fetch that a
+    stray click could start is not a feature, so the browser has to send its
+    intent explicitly — the button in the panel shows the size first.
+    """
+
+    model: str = Field(min_length=1, max_length=160)
+    confirm: bool = False
+    force: bool = False
+
+
 class VerifyRequest(BaseModel):
     """Body of ``POST /api/verify``.
 
@@ -257,6 +272,37 @@ class VerifyRequest(BaseModel):
     only_uncertain: bool = False
     include_values: bool = False
     facts: str = Field(default="", max_length=400)
+
+
+@dataclass
+class ModelPullState:
+    """One in-flight ``models pull``, reported to the browser by polling."""
+
+    model: str = ""
+    status: str = "idle"  # idle | running | done | error | refused
+    phase: str = ""
+    done_bytes: int = 0
+    total_bytes: int = 0
+    path: str = ""
+    error: str = ""
+    task: asyncio.Task | None = None
+
+    def to_dict(self) -> dict[str, Any]:
+        percent = (
+            round(self.done_bytes / self.total_bytes * 100)
+            if self.total_bytes > 0
+            else None
+        )
+        return {
+            "model": self.model,
+            "status": self.status,
+            "phase": self.phase,
+            "done_bytes": self.done_bytes,
+            "total_bytes": self.total_bytes,
+            "percent": percent,
+            "path": self.path,
+            "error": self.error,
+        }
 
 
 @dataclass
@@ -353,6 +399,8 @@ def create_app(settings: AppSettings | None = None) -> FastAPI:
     #: identifiers, and a plaintext copy of a chat about them would undo that.
     chats: dict[str, ChatSession] = {}
     app.state.chats = chats
+    pull = ModelPullState()
+    app.state.model_pull = pull
     app.mount("/static", StaticFiles(directory=str(_HERE / "static")), name="static")
     templates = Jinja2Templates(directory=str(_HERE / "templates"))
 
@@ -910,6 +958,115 @@ def create_app(settings: AppSettings | None = None) -> FastAPI:
         key = hashlib.sha256(token.encode()).hexdigest()[:16]
         session = chats.pop(key, None)
         return {"reset": session is not None, "turns": 0}
+
+    # -- model catalogue (Hugging Face, fetched only on request) ----------
+    def _catalogue_rows() -> list[dict[str, Any]]:
+        directory = model_catalog.default_models_dir()
+        downloaded = {row["id"] for row in model_catalog.list_downloaded(directory)}
+        ram = model_catalog.local_ram_mb()
+        rows = []
+        for spec in CATALOG:
+            row = spec.to_dict()
+            row["downloaded"] = spec.id in downloaded
+            row["fits_ram"] = ram is None or spec.ram_mb <= ram
+            rows.append(row)
+        return rows
+
+    @app.get("/api/models")
+    async def api_models(request: Request) -> dict[str, Any]:
+        """The catalogue as the panel shows it: sizes, licences, what is here."""
+        if not _signed_in(request):
+            raise HTTPException(status_code=401, detail="sign in to use the dashboard")
+        directory = model_catalog.default_models_dir()
+        return {
+            "models": _catalogue_rows(),
+            "directory": str(directory),
+            "disk": model_catalog.describe_disk(directory),
+            "pull": pull.to_dict(),
+            "downloads_require_confirmation": True,
+        }
+
+    @app.post("/api/models/pull")
+    async def api_model_pull(payload: ModelPullRequest, request: Request) -> JSONResponse:
+        """Fetch one model, after the browser has said yes to that exact file."""
+        if not _signed_in(request):
+            raise HTTPException(status_code=401, detail="sign in to use the dashboard")
+        if not payload.confirm:
+            raise HTTPException(
+                status_code=400,
+                detail="a download needs an explicit confirmation — nothing was fetched",
+            )
+        if pull.status == "running" and pull.task and not pull.task.done():
+            raise HTTPException(
+                status_code=409, detail=f"already downloading {pull.model} — one at a time"
+            )
+        directory = model_catalog.default_models_dir()
+        spec = model_catalog.find_model(payload.model, specs=model_catalog.catalogue(directory))
+        if spec is None:
+            raise HTTPException(status_code=404, detail=f"no model called {payload.model!r}")
+        if model_catalog.model_path(spec, directory).is_file() and not payload.force:
+            raise HTTPException(
+                status_code=409, detail=f"{spec.id} is already downloaded — nothing to fetch"
+            )
+        disk = model_catalog.describe_disk(directory)
+        if spec.size_mb and 0 <= disk["free_mb"] < spec.size_mb:
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    f"not enough disk: {model_catalog.format_mb(spec.size_mb)} needed, "
+                    f"{model_catalog.format_mb(disk['free_mb'])} free"
+                ),
+            )
+
+        pull.model = spec.id
+        pull.status = "running"
+        pull.phase = "starting"
+        pull.done_bytes = 0
+        pull.total_bytes = (spec.size_mb or 0) * 1024 * 1024
+        pull.path = ""
+        pull.error = ""
+
+        def report(phase: str, done: int, total: int) -> None:
+            pull.phase = phase
+            pull.done_bytes = done
+            if total > 0:
+                pull.total_bytes = total
+
+        async def fetch() -> None:
+            try:
+                path = await asyncio.to_thread(
+                    model_catalog.download_model,
+                    spec,
+                    directory,
+                    progress=report,
+                    force=payload.force,
+                )
+            except Exception as exc:  # a failed fetch is reported, not raised at a browser
+                pull.status = "error"
+                pull.phase = ""
+                pull.error = f"{exc.__class__.__name__}: {exc}"
+            else:
+                pull.status = "done"
+                pull.phase = "done"
+                pull.path = str(path)
+                pull.done_bytes = pull.total_bytes = max(pull.done_bytes, pull.total_bytes)
+
+        pull.task = asyncio.create_task(fetch())
+        return JSONResponse(
+            {
+                "accepted": True,
+                "model": spec.id,
+                "size_mb": spec.size_mb,
+                "url": spec.url,
+                "note": "the download continues in the background; nothing else is fetched",
+            }
+        )
+
+    @app.get("/api/models/pull")
+    async def api_model_pull_status(request: Request) -> dict[str, Any]:
+        if not _signed_in(request):
+            raise HTTPException(status_code=401, detail="sign in to use the dashboard")
+        return pull.to_dict()
 
     @app.post("/api/verify")
     async def api_verify(payload: VerifyRequest, request: Request) -> JSONResponse:
