@@ -106,6 +106,9 @@ class Fetcher:
         self.request_count = 0
         self.bytes_read = 0
         self.cache_hits = 0
+        #: First URL seen per host — the browser-profile equivalent of a document
+        #: navigation, used as the Referer for later requests to the same host.
+        self._first_url_per_host: dict[str, str] = {}
 
     # -- lifecycle -------------------------------------------------------
     async def __aenter__(self) -> Fetcher:
@@ -150,12 +153,24 @@ class Fetcher:
         return self._client
 
     def _default_headers(self) -> dict[str, str]:
-        return {
-            "User-Agent": self.config.user_agent,
-            "Accept": _ACCEPT_HTML,
-            "Accept-Language": "en-US,en;q=0.8",
-            "Cache-Control": "no-cache",
-        }
+        """Client-level defaults.
+
+        With a browser profile the UA and language come from the profile, so the
+        client never announces the tool on a request that a later hop rebuilds;
+        ``From:`` still carries the contact address. Without one, this is the
+        honest baseline the tool has always sent.
+        """
+        profile = self.config.profile
+        if profile is None:
+            return {
+                "User-Agent": self.config.user_agent,
+                "Accept": _ACCEPT_HTML,
+                "Accept-Language": "en-US,en;q=0.8",
+                "Cache-Control": "no-cache",
+            }
+        headers = profile.headers(contact=self.config.contact_email, navigate=True)
+        headers["Cache-Control"] = "no-cache"
+        return headers
 
     # -- public API ------------------------------------------------------
     async def fetch(
@@ -297,7 +312,22 @@ class Fetcher:
         """One logical request, including retries. Returns (response, attempts)."""
         host = urlsplit(url).hostname or ""
         headers: dict[str, str] = {}
+        profile = self.config.profile
+        if profile is not None:
+            navigate = host not in self._first_url_per_host
+            self._first_url_per_host.setdefault(host, url)
+            headers.update(
+                profile.headers(
+                    url=url,
+                    accept=accept,
+                    contact=self.config.contact_email,
+                    navigate=navigate,
+                    referer="" if navigate else self._first_url_per_host[host],
+                )
+            )
         if accept:
+            # An explicit Accept from the caller wins over the profile's, but the
+            # navigation headers stay: they describe the request, not the body type.
             headers["Accept"] = accept
         if extra_headers:
             headers.update({str(k): str(v) for k, v in extra_headers.items()})

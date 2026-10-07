@@ -141,6 +141,10 @@ def build_parser() -> argparse.ArgumentParser:
                       help="ignore robots.txt (not recommended; some sources will be blocked)")
     scan.add_argument("--robots-fail-open", action="store_true",
                       help="scan anyway when robots.txt cannot be fetched (RFC 9309 says don't)")
+    scan.add_argument("--browser", nargs="?", const="default", default=None, metavar="NAME",
+                      help="send browser-shaped navigation headers (chrome/firefox/safari/edge). "
+                           "Still robots-aware, still rate-limited, still shows From: if "
+                           "D3TA1L3R_UA_EMAIL is set. Default: off (the tool identifies itself).")
     scan.add_argument("--timeout", type=float, default=None, help="per-request timeout, seconds")
     scan.add_argument("--connect-timeout", type=float, default=None, help="connect timeout, seconds")
     scan.add_argument("--jobs", "-j", type=int, default=None,
@@ -172,6 +176,9 @@ def build_parser() -> argparse.ArgumentParser:
     sources.add_argument("--enabled-only", action="store_true",
                          help="hide sources that are disabled by default")
     sources.add_argument("--json", action="store_true", help="machine-readable output")
+    sources.add_argument("--not-found-phrases", dest="not_found_phrases", action="store_true",
+                         help="print the page phrases that mean 'no such account' "
+                              "(and the ambiguous ones reported as gaps)")
     sources.add_argument("--check", action="store_true",
                          help="live check: query one known-real handle and report which sources work")
 
@@ -186,6 +193,8 @@ def build_parser() -> argparse.ArgumentParser:
     calibrate.add_argument("--expect-hit", action="append", default=[],
                            metavar="SITE_ID=HANDLE",
                            help="ground truth: a handle you own on that site, to confirm detection")
+    calibrate.add_argument("--browser", nargs="?", const="default", default=None, metavar="NAME",
+                           help="browser-shaped headers, as for `scan --browser`")
     calibrate.add_argument("--timeout", type=float, default=None)
     calibrate.add_argument("--jobs", "-j", type=int, default=None)
     calibrate.add_argument("--cache-dir", default=None)
@@ -545,6 +554,37 @@ def _filter_confidence(report: ScanReport, minimum: Confidence) -> ScanReport:
 # sources
 # ---------------------------------------------------------------------------
 def cmd_sources(args: argparse.Namespace) -> int:
+    """List the source inventory — or the phrases the not-found detector looks for."""
+    if getattr(args, "not_found_phrases", False):
+        return _print_not_found_phrases(args)
+    return _sources_inventory(args)
+
+
+def _print_not_found_phrases(args: argparse.Namespace) -> int:
+    """Show exactly which page wording means "this account is not there"."""
+    from .sources.notfound import phrase_registry
+
+    registry = phrase_registry()
+    if getattr(args, "json", False):
+        print(json.dumps(registry, indent=2))
+        return EXIT_OK
+    print("Phrases that make a 200 OK mean \"no such account\":\n")
+    for phrase in registry["absent"]:
+        print(f"  - {phrase}")
+    print(
+        "\nAmbiguous wording, reported as a gap rather than as an answer "
+        "(it also covers private,\nsuspended and bot-check pages):\n"
+    )
+    for phrase in registry["ambiguous"]:
+        print(f"  - {phrase}")
+    print(
+        "\nSites can override this with their own not_found_marker in data/sites.json;\n"
+        "that marker is checked first and quoted in the report."
+    )
+    return EXIT_OK
+
+
+def _sources_inventory(args: argparse.Namespace) -> int:
     engine = ScanEngine(ScanConfig())
     rows = engine.describe_sources()
     if args.kind:
@@ -1520,6 +1560,8 @@ def _config_from_args(
         overrides["strict_ssrf"] = args.strict_ssrf
     if getattr(args, "demo", False):
         overrides["demo"] = True
+    if getattr(args, "browser", None) is not None:
+        overrides["browser_profile"] = args.browser or "off"
     if not for_calibrate and not for_breach:
         if getattr(args, "sources", None):
             overrides["enabled_sources"] = frozenset(_split_values([args.sources]))

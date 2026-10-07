@@ -165,7 +165,12 @@ class ScanEngine:
         report = ScanReport.new(
             target,
             __version__,
-            user_agent=self.config.user_agent,
+            # The UA actually sent, plus the profile that chose it — a report should
+            # never record a User-Agent the run did not use.
+            user_agent=(self.config.profile.user_agent if self.config.profile
+                        else self.config.user_agent),
+            browser_profile=self.config.browser_profile,
+            contact_email=self.config.contact_email,
             timeout_seconds=self.config.timeout,
             concurrency=self.config.rate.global_concurrency,
             per_host_rps=self.config.rate.per_host_rps,
