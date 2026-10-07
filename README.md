@@ -276,6 +276,12 @@ rather than kept. Nothing is bundled with this tool and nothing is downloaded
 unless you ask for it by name. `HF_TOKEN` is used only if you have already put
 one in your environment — the public models here need no key.
 
+The dashboard shows the same catalogue on the main page — name, parameters,
+download size, memory, licence and repository for every entry, with a *download*
+button per row. That button asks for the size and licence in a confirmation
+dialog before anything starts, one download runs at a time, and progress is
+reported while it runs; nothing is fetched by looking at the page.
+
 Right-sized for a 4 GB machine (CPU only, no GPU):
 
 | Model | Download | Resident | Note |

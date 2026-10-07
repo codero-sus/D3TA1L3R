@@ -485,6 +485,164 @@
     status.textContent = "conversation forgotten";
   }
 
+  function humanMb(mb) {
+    if (mb === null || mb === undefined) return "?";
+    return mb >= 1024 ? (mb / 1024).toFixed(1) + " GB" : mb + " MB";
+  }
+
+  function renderModels(payload) {
+    const table = $("#models-table");
+    const foot = $("#models-foot");
+    table.textContent = "";
+    foot.textContent = "";
+    if (!(payload.models || []).length) {
+      $("#models-status").textContent = "the catalogue is empty";
+      return;
+    }
+    const box = document.createElement("table");
+    box.className = "scans";
+    const head = document.createElement("thead");
+    const headRow = document.createElement("tr");
+    for (const label of ["Model", "Download", "RAM", "Licence", "Source", "State"]) {
+      const th = document.createElement("th");
+      th.textContent = label;
+      headRow.appendChild(th);
+    }
+    head.appendChild(headRow);
+    box.appendChild(head);
+    const body = document.createElement("tbody");
+    for (const model of payload.models) {
+      const row = document.createElement("tr");
+      const name = document.createElement("td");
+      name.textContent = model.name + " · " + model.parameters + " " + model.quant;
+      if (!model.fits_ram) {
+        const warn = document.createElement("span");
+        warn.className = "warn-text";
+        warn.textContent = " (more RAM than this machine has)";
+        name.appendChild(warn);
+      }
+      row.appendChild(name);
+      for (const value of [humanMb(model.size_mb), humanMb(model.ram_mb), model.license]) {
+        const cell = document.createElement("td");
+        cell.textContent = value;
+        row.appendChild(cell);
+      }
+      const source = document.createElement("td");
+      const link = document.createElement("a");
+      link.href = model.url;
+      link.textContent = model.repo;
+      link.rel = "noopener noreferrer nofollow";
+      link.target = "_blank";
+      source.appendChild(link);
+      row.appendChild(source);
+
+      const state = document.createElement("td");
+      state.className = "row-actions";
+      if (model.downloaded) {
+        const badge = document.createElement("span");
+        badge.className = "badge low";
+        badge.textContent = "downloaded";
+        state.appendChild(badge);
+      } else {
+        const button = document.createElement("button");
+        button.type = "button";
+        button.textContent = "download";
+        button.addEventListener("click", () => pullModel(model));
+        state.appendChild(button);
+      }
+      row.appendChild(state);
+      body.appendChild(row);
+    }
+    box.appendChild(body);
+    table.appendChild(box);
+    foot.textContent =
+      "Models directory: " + (payload.directory || "?") + " · " +
+      humanMb(payload.disk && payload.disk.free_mb) + " free · " +
+      "the licence shown is the one the repository states — it governs the weights, " +
+      "not this tool. Bigger models answer better; smaller ones answer sooner.";
+  }
+
+  async function loadModels() {
+    const status = $("#models-status");
+    try {
+      const response = await fetch("/api/models");
+      if (!response.ok) {
+        status.textContent = "the catalogue needs a signed-in session";
+        return;
+      }
+      const payload = await response.json();
+      status.textContent = (payload.models || []).length + " model(s) · one download at a time";
+      renderModels(payload);
+      if (payload.pull && payload.pull.status === "running") watchPull();
+    } catch (error) {
+      status.textContent = "could not load the catalogue: " + error;
+    }
+  }
+
+  async function pullModel(model) {
+    const status = $("#models-status");
+    const size = humanMb(model.size_mb);
+    const agreed = window.confirm(
+      "Download " + model.name + " (" + size + ") from " + model.repo + "?\n\n" +
+      "Licence: " + model.license + "\nMemory needed: " + humanMb(model.ram_mb) +
+      "\n\nNothing else is fetched, and no question ever leaves this machine."
+    );
+    if (!agreed) {
+      status.textContent = "nothing downloaded";
+      return;
+    }
+    status.textContent = "starting the download of " + model.id + "…";
+    const response = await fetch("/api/models/pull", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ model: model.id, confirm: true }),
+    });
+    if (!response.ok) {
+      const detail = await response.json().catch(() => ({}));
+      status.textContent = detail.detail || "the download request was refused";
+      return;
+    }
+    watchPull();
+  }
+
+  async function watchPull() {
+    const status = $("#models-status");
+    if (status.dataset.polling === "1") return;
+    status.dataset.polling = "1";
+    try {
+      for (;;) {
+        const response = await fetch("/api/models/pull");
+        if (!response.ok) break;
+        const state = await response.json();
+        if (state.status === "running") {
+          status.textContent =
+            state.model + " · " + (state.phase || "downloading") + " · " +
+            (state.percent === null || state.percent === undefined
+              ? state.done_bytes + " bytes"
+              : state.percent + "%") +
+            " — you can leave this page open";
+        } else if (state.status === "done") {
+          status.textContent = "downloaded " + state.model + " — ask a question to use it";
+          await loadModels();
+          break;
+        } else if (state.status === "error") {
+          status.textContent = "the download failed: " + state.error;
+          break;
+        } else {
+          break;
+        }
+        await new Promise((resolve) => setTimeout(resolve, 1000));
+      }
+    } finally {
+      status.dataset.polling = "0";
+    }
+  }
+
+  function wireModels() {
+    if (!$("#models-table")) return;
+    loadModels();
+  }
+
   const VERDICT_LABEL = {
     mine: "looks like you",
     not_mine: "probably not you",
@@ -648,6 +806,7 @@
     wireVault();
     wireAsk();
     wireVerify();
+    wireModels();
   }
 
   window.D3TA1L3R = {
@@ -659,6 +818,7 @@
     askQuestion: askQuestion,
     resetChat: resetChat,
     verifyIdentities: verifyIdentities,
+    pullModel: pullModel,
   };
   if (document.readyState === "loading") {
     document.addEventListener("DOMContentLoaded", boot);
