@@ -485,6 +485,144 @@
     status.textContent = "conversation forgotten";
   }
 
+  const VERDICT_LABEL = {
+    mine: "looks like you",
+    not_mine: "probably not you",
+    unsure: "cannot tell",
+  };
+
+  function renderVerification(payload) {
+    const box = $("#verify-result");
+    box.hidden = false;
+    box.textContent = "";
+    const tally = payload.tally || {};
+    const heading = document.createElement("p");
+    heading.className = "fineprint";
+    heading.textContent =
+      "reviewed by " + (payload.model || "?") + " (" + (payload.backend || "?") + ") · " +
+      (tally.considered || 0) + " finding(s) · looks like you: " + (tally.mine || 0) +
+      " · probably not you: " + (tally.not_mine || 0) + " · cannot tell: " + (tally.unsure || 0) +
+      " · raw values " + (payload.values_included ? "included" : "masked");
+    box.appendChild(heading);
+
+    const table = document.createElement("table");
+    table.className = "scans";
+    const head = document.createElement("thead");
+    const headRow = document.createElement("tr");
+    for (const label of ["Finding", "Measured", "Verdict", "Why"]) {
+      const th = document.createElement("th");
+      th.textContent = label;
+      headRow.appendChild(th);
+    }
+    head.appendChild(headRow);
+    table.appendChild(head);
+    const body = document.createElement("tbody");
+    for (const verdict of payload.verdicts || []) {
+      const row = document.createElement("tr");
+      const id = document.createElement("td");
+      id.className = "mono";
+      id.textContent = verdict.finding_id;
+      if (verdict.url) {
+        const link = document.createElement("a");
+        link.href = verdict.url;
+        link.rel = "noopener noreferrer nofollow";
+        link.target = "_blank";
+        link.textContent = " ↗";
+        id.appendChild(link);
+      }
+      row.appendChild(id);
+      const measured = document.createElement("td");
+      measured.textContent = verdict.measured_confidence || "?";
+      row.appendChild(measured);
+      const judged = document.createElement("td");
+      judged.textContent = VERDICT_LABEL[verdict.verdict] || verdict.verdict;
+      if (verdict.disagrees_with_evidence) {
+        const flag = document.createElement("b");
+        flag.className = "warn-text";
+        flag.textContent = " ⚠ disagrees with the scan";
+        judged.appendChild(flag);
+      }
+      if (verdict.parsed === false) {
+        const flag = document.createElement("span");
+        flag.className = "warn-text";
+        flag.textContent = " (unparseable answer)";
+        judged.appendChild(flag);
+      }
+      row.appendChild(judged);
+      const why = document.createElement("td");
+      why.textContent = verdict.reason || "";
+      row.appendChild(why);
+      body.appendChild(row);
+    }
+    table.appendChild(body);
+    box.appendChild(table);
+
+    const disclaimer = document.createElement("p");
+    disclaimer.className = "fineprint";
+    disclaimer.textContent =
+      (payload.disclaimer || "") +
+      (payload.stored_to_disk === false ? " Nothing was written to disk." : "");
+    box.appendChild(disclaimer);
+    if ((payload.notes || []).length) {
+      const notes = document.createElement("p");
+      notes.className = "fineprint";
+      notes.textContent = payload.notes.join(" · ");
+      box.appendChild(notes);
+    }
+  }
+
+  function syncVerifyButton() {
+    const enabled = $("#verify-enabled").checked;
+    const button = $("#verify-submit");
+    button.disabled = !enabled;
+    const status = $("#verify-status");
+    if (!enabled) status.textContent = "tick the box above to enable this";
+    else status.textContent = "ready — the local model will judge these findings";
+  }
+
+  async function verifyIdentities() {
+    const status = $("#verify-status");
+    if (!$("#verify-enabled").checked) {
+      status.textContent = "tick the box first — verification is never automatic";
+      return;
+    }
+    const button = $("#verify-submit");
+    button.disabled = true;
+    status.textContent = "judging (a small model takes a few seconds per batch)…";
+    try {
+      const response = await fetch("/api/verify", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          facts: ($("#verify-facts").value || "").trim(),
+          only_uncertain: !!$("#verify-only-uncertain").checked,
+          include_values: !!$("#verify-include-values").checked,
+        }),
+      });
+      if (!response.ok) {
+        const detail = await response.json().catch(() => ({}));
+        status.textContent =
+          detail.detail || "the verify endpoint refused (" + response.status + ")";
+        return;
+      }
+      const payload = await response.json();
+      status.textContent = payload.elapsed_ms + " ms";
+      renderVerification(payload);
+    } catch (error) {
+      status.textContent = "the request failed: " + error;
+    } finally {
+      button.disabled = !$("#verify-enabled").checked;
+    }
+  }
+
+  function wireVerify() {
+    const button = $("#verify-submit");
+    if (!button) return;
+    button.addEventListener("click", verifyIdentities);
+    $("#verify-enabled").addEventListener("change", syncVerifyButton);
+    syncVerifyButton();
+  }
+
   function wireAsk() {
     const button = $("#ask-submit");
     if (!button) return;
@@ -509,6 +647,7 @@
     wireDeletes();
     wireVault();
     wireAsk();
+    wireVerify();
   }
 
   window.D3TA1L3R = {
@@ -519,6 +658,7 @@
     addToWatchlist: addToWatchlist,
     askQuestion: askQuestion,
     resetChat: resetChat,
+    verifyIdentities: verifyIdentities,
   };
   if (document.readyState === "loading") {
     document.addEventListener("DOMContentLoaded", boot);

@@ -184,6 +184,9 @@ class TestReadme:
         readme = _read("README.md")
         scope = _read("docs/SCOPE.md")
         assert "--verify" in readme and "--verify" in scope
+        # the dashboard has the same rule, expressed as a checkbox
+        assert "Review identity" in readme
+        assert "disabled until you tick it" in readme
         for text in (readme, scope):
             lowered = text.lower()
             assert "opt-in" in lowered or "only when you ask" in lowered
