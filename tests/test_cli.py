@@ -45,6 +45,20 @@ class TestParser:
         }
 
 
+class TestWebCommand:
+    def test_the_dashboard_defaults_to_the_documented_port(self) -> None:
+        """The README tells people to browse :7248, so the default must be 7248."""
+        parser = build_parser()
+        args = parser.parse_args(["web"])
+        assert args.port == 7248
+        assert args.host == "0.0.0.0", "a container or proxy must be able to reach it"
+
+    def test_the_port_can_still_be_chosen(self) -> None:
+        parser = build_parser()
+        assert parser.parse_args(["web", "--port", "9000"]).port == 9000
+        assert parser.parse_args(["web", "--host", "127.0.0.1"]).host == "127.0.0.1"
+
+
 class TestScanCommand:
     def test_scan_without_an_identifier_is_a_usage_error(self, capsys) -> None:
         assert main(["scan"]) == EXIT_USAGE

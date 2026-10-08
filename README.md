@@ -85,7 +85,7 @@ open scans/*.html
 d3ta1l3r scan -u anything --demo
 
 # 5. Open the dashboard
-d3ta1l3r web --port 8000            # then browse http://localhost:8000
+d3ta1l3r web                        # then browse http://localhost:7248
 
 # 6. Build an encrypted watchlist of your own identifiers
 d3ta1l3r vault init                 # prompts for a passphrase (>= 12 chars)
@@ -96,7 +96,7 @@ d3ta1l3r vault add --kind password --store-hash   # checked via k-anonymity, nev
 d3ta1l3r breach run                 # exit 3 if something was found, 2 if nothing could be checked
 
 # 8. ...and have the dashboard re-check it every time you log in
-d3ta1l3r web --vault --port 8000    # the login passphrase *is* the vault passphrase
+d3ta1l3r web --vault                # the login passphrase *is* the vault passphrase
 
 # 9. Ask questions about your own scans — with a model on this machine
 d3ta1l3r ask "what should I fix first, and what could not be checked?"
@@ -388,10 +388,10 @@ makes it a CI gate.
 ## Dashboard
 
 ```bash
-d3ta1l3r web --port 8000            # binds 0.0.0.0 so containers/proxies can reach it
+d3ta1l3r web                        # binds 0.0.0.0:7248 so containers/proxies can reach it
 d3ta1l3r web --host 127.0.0.1       # bind to loopback if you are the only user
 d3ta1l3r web --demo                 # synthetic results, no outbound requests
-d3ta1l3r web --vault --port 8000    # unlock your watchlist at login
+d3ta1l3r web --vault --port 7248    # unlock your watchlist at login (any port works)
 ```
 
 The dashboard runs scans, streams live progress over Server-Sent Events (with
