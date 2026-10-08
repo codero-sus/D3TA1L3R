@@ -342,7 +342,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     web = sub.add_parser("web", help="serve the local dashboard")
     web.add_argument("--host", default="0.0.0.0", help="bind address (default 0.0.0.0)")
-    web.add_argument("--port", type=int, default=8000, help="port (default 8000)")
+    web.add_argument("--port", type=int, default=7248, help="port (default 7248)")
     web.add_argument("--output", default=str(DEFAULT_OUTPUT_DIR), help="scan storage directory")
     web.add_argument("--demo", action="store_true",
                      help="run the dashboard in demo mode (synthetic results, no network)")
