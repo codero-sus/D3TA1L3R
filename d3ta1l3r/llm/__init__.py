@@ -6,11 +6,15 @@ of these still exposes my real name?"*, *"what changed since last week?"*.
 
 Three rules shape the design, and they follow from the rest of D3TA1L3R:
 
-1. **The model is local, always.** Two real backends are supported — a GGUF
-   file through ``llama-cpp-python``, or an Ollama daemon on loopback — and
-   neither may point at a remote host. :class:`~d3ta1l3r.llm.backends.OllamaBackend`
-   refuses any host that is not ``127.0.0.1``/``localhost``/``::1``. Nothing
-   about your footprint is sent to a company to be summarised.
+1. **The model is local, always.** Three real backends are supported — a GGUF
+   file through ``llama-cpp-python``, an Ollama daemon on loopback, or a GGUF
+   served by `Cortex LLM Hoster <https://github.com/codero-sus/Cortex_LLMHoster>`_
+   on loopback or your own LAN — and none may point at a public host.
+   :class:`~d3ta1l3r.llm.backends.OllamaBackend` refuses any host that is not
+   ``127.0.0.1``/``localhost``/``::1``, and
+   :class:`~d3ta1l3r.llm.backends.CortexBackend` accepts RFC1918 addresses only
+   when you name the host yourself. Nothing about your footprint is sent to a
+   company to be summarised.
 
 2. **Answers are grounded in ids.** The context is a numbered digest
    (``F1-003`` is finding 3 of scan 1, ``E2`` is watchlist entry 2, ``G1-07`` is
@@ -33,6 +37,10 @@ from __future__ import annotations
 
 from .backends import (
     BACKENDS,
+    CORTEX_DEFAULT_HOST,
+    CORTEX_DEFAULT_MODEL,
+    OLLAMA_AUTO,
+    CortexBackend,
     ExtractiveBackend,
     LlamaCppBackend,
     LLMBackend,
@@ -65,11 +73,15 @@ from .verify import (
 __all__ = [
     "BACKENDS",
     "CATALOG",
+    "CORTEX_DEFAULT_HOST",
+    "CORTEX_DEFAULT_MODEL",
+    "OLLAMA_AUTO",
     "SYSTEM_PROMPT",
     "Answer",
     "ChatSession",
     "CitationReport",
     "ContextItem",
+    "CortexBackend",
     "ExtractiveBackend",
     "FindingVerdict",
     "LLMBackend",

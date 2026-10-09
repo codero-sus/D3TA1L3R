@@ -311,6 +311,15 @@ What the feature promises, and what the tests pin:
 - **It is local, and that is enforced.** `OllamaBackend` raises on any non-loopback
   host; there is no hosted-model client in the codebase, and a test asserts no
   commercial model API is named anywhere under `d3ta1l3r/llm/`.
+- **Three ways to run a model, all yours.** A GGUF file
+  (`--backend llama_cpp`, needs `llama-cpp-python`), an
+  [Ollama](https://ollama.com) daemon on loopback (`--backend ollama`), or
+  [Cortex LLM Hoster](https://github.com/codero-sus/Cortex_LLMHoster)
+  (`--backend cortex`), which serves your GGUFs over an OpenAI-compatible API on
+  `127.0.0.1:8624`. Cortex may also run on a machine on your own LAN — name it
+  with `--cortex-host http://192.168.1.9:8624` and it will be used; a public
+  address is refused. If Cortex is protected with `CORTEX_API_KEY`, D3TA1L3R
+  reads it from the environment and sends it as a bearer token.
 - **Answers cite ids.** The prompt is a numbered digest (`F1-003` is finding 3 of
   scan 1, `E2` is watchlist entry 2, `G1-01` is a gap) and the model must cite
   what it used. Invented ids are detected and reported by the CLI; the dashboard
@@ -320,9 +329,14 @@ What the feature promises, and what the tests pin:
   text and labels, because that is where a handle actually hides.
 - **Nothing is written to disk.** Transcripts live in memory for the session and
   are dropped on logout; asking a question never adds a file next to your reports.
-- **No model is a valid answer.** Without `llama-cpp-python` or Ollama, the same
-  command answers from the report by retrieval and says so — the chat is never a
-  dead box, and it never pretends a retrieval answer came from a model.
+- **No model is a valid answer.** Without `llama-cpp-python`, Ollama or Cortex,
+  the same command answers from the report by retrieval and says so — the chat is
+  never a dead box, and it never pretends a retrieval answer came from a model.
+- **You do not have to know the model's name.** `--ollama-model` and
+  `--cortex-model` default to `auto`, which asks the server what it has and uses
+  the first one it can chat with (embedding-only models are skipped). Naming one
+  explicitly is still a claim that is checked: a name the server does not have is
+  an error listing what it does have, never a silent substitution.
 
 The dashboard has the same panel (question box, raw-values toggle, "answered by"
 line) on the main page once you are signed in. `ask` needs a report: run a scan

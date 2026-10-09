@@ -56,6 +56,9 @@ from .core.report import diff_reports, render_html, render_json, render_markdown
 from .core.storage import ScanStore
 from .errors import D3ta1l3rError, UsageError
 from .llm import (
+    CORTEX_DEFAULT_HOST,
+    CORTEX_DEFAULT_MODEL,
+    OLLAMA_AUTO,
     ChatSession,
     build_context,
     model_doctor,
@@ -356,13 +359,18 @@ def build_parser() -> argparse.ArgumentParser:
     web.add_argument("--no-robots", dest="respect_robots", action="store_false", default=True)
     web.add_argument("--model", metavar="PATH",
                      help="GGUF file for the local report chat (needs llama-cpp-python)")
-    web.add_argument("--chat-backend", choices=("auto", "llama_cpp", "ollama", "extractive"),
+    web.add_argument("--chat-backend",
+                     choices=("auto", "llama_cpp", "ollama", "cortex", "extractive"),
                      default="auto",
                      help="which local backend answers questions about the scans")
-    web.add_argument("--ollama-model", default="llama3.2:1b", metavar="NAME",
-                     help="Ollama model name for the chat (default llama3.2:1b)")
+    web.add_argument("--ollama-model", default=OLLAMA_AUTO, metavar="NAME",
+                     help="Ollama model name for the chat (default auto: ask the daemon)")
     web.add_argument("--ollama-host", default="http://127.0.0.1:11434", metavar="URL",
                      help="Ollama daemon; loopback only")
+    web.add_argument("--cortex-model", default=CORTEX_DEFAULT_MODEL, metavar="ID",
+                     help="Cortex model id (default auto: ask the Cortex server)")
+    web.add_argument("--cortex-host", default=CORTEX_DEFAULT_HOST, metavar="URL",
+                     help="Cortex LLM Hoster; loopback by default, private LAN if you name it")
     ask = sub.add_parser(
         "ask",
         help="ask a question about your stored scans with a model on this machine",
@@ -382,16 +390,21 @@ def build_parser() -> argparse.ArgumentParser:
                      help="where reports are stored (default: scans/)")
     ask.add_argument("--no-watchlist", dest="no_watchlist", action="store_true",
                      help="do not read the vault, even if one is present")
-    ask.add_argument("--backend", choices=("auto", "llama_cpp", "ollama", "extractive"),
+    ask.add_argument("--backend",
+                     choices=("auto", "llama_cpp", "ollama", "cortex", "extractive"),
                      default="auto",
                      help="which local backend to use (default: auto, best available)")
     ask.add_argument("--model", metavar="PATH|ID|auto",
                      help="GGUF file, a catalogue id, repo/file.gguf, or 'auto' for the "
                           "largest downloaded model that fits")
-    ask.add_argument("--ollama-model", default="llama3.2:1b", metavar="NAME",
-                     help="Ollama model name (default llama3.2:1b)")
+    ask.add_argument("--ollama-model", default=OLLAMA_AUTO, metavar="NAME",
+                     help="Ollama model name (default auto: ask the daemon what it has)")
     ask.add_argument("--ollama-host", default="http://127.0.0.1:11434", metavar="URL",
                      help="Ollama daemon; loopback only")
+    ask.add_argument("--cortex-model", default=CORTEX_DEFAULT_MODEL, metavar="ID",
+                     help="Cortex model id (default auto: ask the Cortex server)")
+    ask.add_argument("--cortex-host", default=CORTEX_DEFAULT_HOST, metavar="URL",
+                     help="Cortex LLM Hoster; loopback by default, private LAN if you name it")
     ask.add_argument("--threads", type=int, default=None,
                      help="CPU threads for the model (default: cores - 1, capped at 4)")
     ask.add_argument("--context-size", type=int, default=2048, metavar="TOKENS",
@@ -933,6 +946,8 @@ def cmd_web(args: argparse.Namespace) -> int:
         chat_model_path=Path(args.model).expanduser() if args.model else None,
         ollama_model=args.ollama_model,
         ollama_host=args.ollama_host,
+        cortex_model=args.cortex_model,
+        cortex_host=args.cortex_host,
     )
     settings.output_dir.mkdir(parents=True, exist_ok=True)
     app = create_app(settings)
@@ -1719,6 +1734,9 @@ def cmd_ask(args: argparse.Namespace) -> int:
         model_path=_resolve_model_argument(args),
         ollama_model=args.ollama_model,
         ollama_host=args.ollama_host,
+        cortex_model=args.cortex_model,
+        cortex_host=args.cortex_host,
+        allow_cortex_lan=args.cortex_host != CORTEX_DEFAULT_HOST,
         threads=args.threads,
         context_window=args.context_size,
         ram_budget_mb=args.ram_budget,
@@ -1837,8 +1855,10 @@ def _run_verification(
         raise UsageError(
             "identity verification needs a model, and none is available here. "
             "Download one (`d3ta1l3r models list --fits-memory`, then "
-            "`d3ta1l3r models pull <id>` with llama-cpp-python installed) or run "
-            "Ollama on this machine. Nothing was judged."
+            "`d3ta1l3r models pull <id>` with llama-cpp-python installed), run "
+            "Ollama on this machine, or serve a GGUF with Cortex LLM Hoster "
+            "(`d3ta1l3r ask --list-models` shows which of these is reachable). "
+            "Nothing was judged."
         )
     print(
         f"reviewing with {backend.name} ({backend.model_id}); identifiers "
@@ -1905,6 +1925,9 @@ def _ask_models() -> int:
     print("  d3ta1l3r ask --model ~/models/qwen2.5-1.5b-instruct-q4_k_m.gguf \"what should I fix first?\"")
     print("Or point at an Ollama daemon on this machine:")
     print("  ollama pull llama3.2:1b && d3ta1l3r ask --backend ollama \"what changed?\"")
+    print("Or at a GGUF served by Cortex LLM Hoster (loopback, or your LAN if named):")
+    print("  d3ta1l3r ask --backend cortex \"what changed?\"")
+    print("  d3ta1l3r ask --backend cortex --cortex-host http://192.168.1.9:8624 \"what changed?\"")
     return EXIT_OK
 
 
