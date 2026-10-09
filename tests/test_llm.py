@@ -42,6 +42,7 @@ from d3ta1l3r.llm import (
 from d3ta1l3r.llm.backends import (
     DEFAULT_RAM_BUDGET_MB,
     GGUF_MAGIC,
+    OLLAMA_AUTO,
     estimate_model_ram_mb,
     is_loopback_host,
 )
@@ -160,6 +161,95 @@ class TestBackendSelection:
         ok, reason = backend.available()
         assert not ok
         assert "llama3.2:1b" in reason and "phi3:mini" in reason
+
+
+class TestOllamaAutoProbe:
+    """``--ollama-model auto`` asks the daemon instead of guessing a name."""
+
+    def _backend(self, names: list[str], model: str = "auto") -> OllamaBackend:
+        def handler(request: httpx.Request) -> httpx.Response:
+            return httpx.Response(200, json={"models": [{"name": name} for name in names]})
+
+        return OllamaBackend(model, transport=httpx.MockTransport(handler), timeout=5)
+
+    def test_auto_is_the_default(self) -> None:
+        assert OLLAMA_AUTO == "auto"
+        backend = OllamaBackend()
+        assert backend.model == "auto"
+
+    def test_auto_picks_the_first_model_the_daemon_has(self) -> None:
+        backend = self._backend(["mistral:7b", "phi3:mini"])
+        assert backend.available()[0] is True
+        assert backend.model_id == "mistral:7b"
+        assert backend.resolved_model == "mistral:7b"
+
+    def test_auto_skips_embedding_models(self) -> None:
+        """An embedding model cannot answer a question, so it is not a candidate."""
+        backend = self._backend(["nomic-embed-text", "llama3.2:1b"])
+        assert backend.available()[0] is True
+        assert backend.model_id == "llama3.2:1b"
+
+    def test_auto_with_only_embeddings_is_a_failure(self) -> None:
+        backend = self._backend(["nomic-embed-text"])
+        ok, reason = backend.available()
+        assert ok is False
+        assert "embedding" in reason.lower()
+
+    def test_auto_generates_with_the_resolved_name(self) -> None:
+        """The literal string 'auto' must never reach the daemon."""
+        seen: list[str] = []
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            import json
+
+            if request.url.path == "/api/tags":
+                return httpx.Response(200, json={"models": [{"name": "qwen2.5:1.5b"}]})
+            seen.append(str(json.loads(request.content)["model"]))
+            return httpx.Response(200, json={"message": {"content": "ok"}})
+
+        backend = OllamaBackend("auto", transport=httpx.MockTransport(handler), timeout=5)
+        backend.generate([{"role": "user", "content": "hi"}])
+        assert seen == ["qwen2.5:1.5b"]
+
+    def test_an_explicit_model_still_has_to_exist(self) -> None:
+        """Naming one is a claim; a wrong name should fail rather than substitute."""
+        backend = self._backend(["phi3:mini"], model="llama3.2:1b")
+        ok, reason = backend.available()
+        assert ok is False
+        assert "llama3.2:1b" in reason
+
+    def test_an_explicit_model_that_exists_is_used(self) -> None:
+        backend = self._backend(["phi3:mini", "mistral:7b"], model="mistral:7b")
+        assert backend.available()[0] is True
+        assert backend.model_id == "mistral:7b"
+
+    def test_served_models_is_reported_for_the_doctor(self) -> None:
+        assert self._backend(["a:1b", "b:1b"]).served_models() == ["a:1b", "b:1b"]
+
+    def test_a_generation_cold_start_still_resolves(self) -> None:
+        """generate() before available() must not send 'auto' either."""
+        seen: list[str] = []
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            import json
+
+            if request.url.path == "/api/tags":
+                return httpx.Response(200, json={"models": [{"name": "llama3.2:1b"}]})
+            seen.append(str(json.loads(request.content)["model"]))
+            return httpx.Response(200, json={"message": {"content": "ok"}})
+
+        OllamaBackend("auto", transport=httpx.MockTransport(handler), timeout=5).generate(
+            [{"role": "user", "content": "hi"}]
+        )
+        assert seen == ["llama3.2:1b"]
+
+    def test_an_unavailable_daemon_refuses_to_generate(self) -> None:
+        def handler(request: httpx.Request) -> httpx.Response:
+            raise httpx.ConnectError("refused", request=request)
+
+        backend = OllamaBackend("auto", transport=httpx.MockTransport(handler), timeout=5)
+        with pytest.raises(UsageError, match="Ollama cannot answer"):
+            backend.generate([{"role": "user", "content": "hi"}])
 
 
 class TestModelSizing:

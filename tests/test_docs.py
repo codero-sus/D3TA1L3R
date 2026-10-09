@@ -216,6 +216,33 @@ class TestReadme:
                     urls.append(f"{path.name}:{number}: {line.strip()}")
         assert not urls, urls
 
+    def test_cortex_is_documented_and_stays_local(self) -> None:
+        """The third backend must be described, and described as yours."""
+        readme = _read("README.md").lower()
+        scope = _read("docs/SCOPE.md").lower()
+        for text in (readme, scope):
+            assert "cortex" in text, "Cortex is a supported backend and must be documented"
+            assert "--cortex-host" in text, "naming a LAN host is the opt-in, so it needs saying"
+        # a LAN box is allowed on purpose; a public address is not
+        assert "192.168" in _read("docs/SCOPE.md")
+        assert "refused" in scope
+
+    def test_the_lan_rule_is_rfc1918_and_nothing_broader(self) -> None:
+        """`is_private` would also let the documentation ranges through."""
+        body = (ROOT / "d3ta1l3r" / "llm" / "backends.py").read_text(encoding="utf-8")
+        assert "10.0.0.0/8" in body
+        assert "172.16.0.0/12" in body
+        assert "192.168.0.0/16" in body
+        assert ".is_private" not in body, (
+            "use the LAN_NETWORKS table: ipaddress.is_private is broader than RFC1918 "
+            "and would also accept the documentation ranges and link-local"
+        )
+
+    def test_auto_model_selection_is_documented(self) -> None:
+        scope = _read("docs/SCOPE.md")
+        assert "auto" in scope
+        assert "--ollama-model" in scope and "--cortex-model" in scope
+
 
 class TestSourceDatabase:
     def test_ids_are_valid_and_unique(self) -> None:

@@ -75,6 +75,7 @@ from ..core.storage import ScanStore
 from ..errors import D3ta1l3rError, UsageError
 from ..llm import (
     CATALOG,
+    CORTEX_DEFAULT_HOST,
     ChatSession,
     build_context,
     model_doctor,
@@ -120,9 +121,13 @@ class AppSettings:
     chat_backend: str = "auto"
     """Which local chat backend to prefer. Never remote — see d3ta1l3r.llm."""
     chat_model_path: Path | None = None
-    """A GGUF file for llama-cpp-python; None falls back to Ollama, then retrieval."""
-    ollama_model: str = "llama3.2:1b"
+    """A GGUF file for llama-cpp-python; None falls back to Ollama, Cortex, then retrieval."""
+    ollama_model: str = "auto"
+    """Ollama model name; ``auto`` asks the daemon what it has."""
     ollama_host: str = "http://127.0.0.1:11434"
+    cortex_model: str = "auto"
+    """Cortex model id; ``auto`` asks the Cortex server what it serves."""
+    cortex_host: str = "http://127.0.0.1:8624"
 
     def base_config(self) -> ScanConfig:
         """The config every scan inherits — including the dashboard's demo switch.
@@ -901,6 +906,9 @@ def create_app(settings: AppSettings | None = None) -> FastAPI:
             model_path=settings.chat_model_path,
             ollama_model=settings.ollama_model,
             ollama_host=settings.ollama_host,
+            cortex_model=settings.cortex_model,
+            cortex_host=settings.cortex_host,
+            allow_cortex_lan=settings.cortex_host != CORTEX_DEFAULT_HOST,
         )
         session = ChatSession(fresh_context, backend, notes=notes)
         chats[key] = session
@@ -915,7 +923,13 @@ def create_app(settings: AppSettings | None = None) -> FastAPI:
         if not _signed_in(request):
             raise HTTPException(status_code=401, detail="sign in to use the dashboard")
         try:
-            return model_doctor(settings.chat_model_path)
+            return model_doctor(
+                settings.chat_model_path,
+                ollama_model=settings.ollama_model,
+                ollama_host=settings.ollama_host,
+                cortex_model=settings.cortex_model,
+                cortex_host=settings.cortex_host,
+            )
         except Exception as exc:  # a broken daemon must not break the page
             return {
                 "ram_budget_mb": 0,
@@ -1085,6 +1099,9 @@ def create_app(settings: AppSettings | None = None) -> FastAPI:
                 model_path=settings.chat_model_path,
                 ollama_model=settings.ollama_model,
                 ollama_host=settings.ollama_host,
+                cortex_model=settings.cortex_model,
+                cortex_host=settings.cortex_host,
+                allow_cortex_lan=settings.cortex_host != CORTEX_DEFAULT_HOST,
             )
         except (UsageError, D3ta1l3rError) as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc

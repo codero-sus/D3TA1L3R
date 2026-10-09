@@ -91,17 +91,48 @@ Consequences that were designed in, not discovered later:
 `ask` (CLI and dashboard) can turn a report into prose. That is a new place where
 personal data could travel, so the rules are explicit:
 
-- **Two real backends, both on this machine.** A GGUF file loaded with
-  `llama-cpp-python`, or an Ollama daemon. `OllamaBackend` refuses any host that
-  is not `127.0.0.1`/`localhost`/`::1` — a "local model" that is really an HTTP
-  call to a company is data exfiltration with better wording, so it is a hard
-  error rather than a warning. There is no hosted-model client anywhere in the
-  codebase, and a test asserts that no commercial model endpoint is named under
-  `d3ta1l3r/llm/`.
+- **Three real backends, all on hardware you control.** A GGUF file loaded with
+  `llama-cpp-python`; an Ollama daemon on loopback; or a GGUF served by
+  [Cortex LLM Hoster](https://github.com/codero-sus/Cortex_LLMHoster), which
+  supervises `llama-server` from llama.cpp and publishes the OpenAI-compatible
+  `/v1/chat/completions`. The wire format is someone else's; the model, the
+  weights and the prompt are not.
+
+  The host rules differ slightly, and the difference is deliberate:
+
+  | Backend | Loopback | Your LAN | Public address |
+  | --- | --- | --- | --- |
+  | `llama_cpp` | in-process | — | — |
+  | `ollama` | allowed | refused | refused |
+  | `cortex` | allowed | allowed **if you name it** with `--cortex-host` | refused |
+
+  Ollama refuses any host that is not `127.0.0.1`/`localhost`/`::1`. Cortex
+  additionally accepts `10/8`, `172.16/12` and `192.168/16` — and only those
+  three ranges, checked literally rather than with `ipaddress.is_private`, which
+  is broader than RFC1918 and would also have let the documentation ranges
+  through. Running the model on a home server is a normal way to spare a 4 GB
+  laptop, so it is permitted, but it is permitted on purpose: the default is
+  loopback, and naming a host is the opt-in. Hostnames are never accepted as
+  LAN, because a name could resolve anywhere.
+
+  A "local model" that is really an HTTP call to a company is data exfiltration
+  with better wording, so every refusal above is a hard error rather than a
+  warning. There is no hosted-model client anywhere in the codebase, and a test
+  asserts that no commercial model endpoint is named under `d3ta1l3r/llm/`.
+  Cortex is not an exception to that rule: it is a server you run, and its
+  `CORTEX_API_KEY` unlocks your own box, not an account with a vendor.
+
+- **You do not have to guess the model's name.** `--ollama-model` and
+  `--cortex-model` default to `auto`: the server is asked what it has, and the
+  first model that can hold a conversation is used (embedding-only models are
+  skipped — they cannot answer). Naming one explicitly is still checked against
+  what the server reports, and a name it does not have is an error that lists
+  what it does have rather than a silent substitution.
 - **Masked by default.** The digest the model sees carries `al***@example.com`,
   not your address. `--include-values` (CLI) or the panel's checkbox includes the
   real identifiers — an explicit, per-invocation decision, defensible only
-  because the model is on the same machine. Masking is a scrub, not a format: it
+  because the model runs on hardware you control — this machine, or a box on your
+  own LAN when you have pointed Cortex at one. Masking is a scrub, not a format: it
   also covers finding URLs (`https://github.com/alice`), evidence strings and
   labels, which is where a handle usually hides.
 - **Answers are tied to ids.** Context lines are numbered (`F1-003` = finding 3
@@ -113,7 +144,7 @@ personal data could travel, so the rules are explicit:
   checked, so "what could not be checked?" is answerable. The prompt forbids
   inventing findings, counts or URLs, and a model failure degrades to retrieval
   over the report with a note in the answer.
-- **No model is a supported state.** Without either backend the same command
+- **No model is a supported state.** Without any of the three backends the same command
   answers from the report by keyword retrieval and says so; the dashboard shows
   which backend spoke, including when the answer was not generated at all.
 - **Size, honestly.** `--ram-budget` (default 4096 MB) refuses to load a GGUF

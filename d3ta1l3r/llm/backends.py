@@ -23,6 +23,7 @@ What each backend refuses to do:
 
 from __future__ import annotations
 
+import ipaddress
 import math
 import os
 import time
@@ -39,7 +40,11 @@ from .prompt import build_prompt
 
 __all__ = [
     "BACKENDS",
+    "CORTEX_DEFAULT_HOST",
+    "CORTEX_DEFAULT_MODEL",
     "GGUF_MAGIC",
+    "OLLAMA_AUTO",
+    "CortexBackend",
     "ExtractiveBackend",
     "LLMBackend",
     "LlamaCppBackend",
@@ -48,6 +53,7 @@ __all__ = [
     "backend_status",
     "estimate_model_ram_mb",
     "is_loopback_host",
+    "is_private_lan_host",
     "model_doctor",
     "recommend_models",
     "select_backend",
@@ -60,7 +66,16 @@ DEFAULT_RAM_BUDGET_MB = 4096
 LOOPBACK_HOSTS = frozenset({"127.0.0.1", "localhost", "::1", "[::1]"})
 
 OLLAMA_DEFAULT_HOST = "http://127.0.0.1:11434"
-OLLAMA_DEFAULT_MODEL = "llama3.2:1b"
+#: ``auto`` asks the daemon what it has instead of guessing a name that may not
+#: be pulled. An explicit name still wins, and still fails loudly if absent.
+OLLAMA_AUTO = "auto"
+OLLAMA_DEFAULT_MODEL = OLLAMA_AUTO
+
+#: Cortex LLM Hoster is a local GGUF hoster that speaks the OpenAI wire format.
+#: Loopback is the default; a private-LAN host needs --cortex-host to be explicit.
+CORTEX_DEFAULT_HOST = "http://127.0.0.1:8624"
+CORTEX_DEFAULT_MODEL = OLLAMA_AUTO
+CORTEX_API_KEY_ENV = "CORTEX_API_KEY"
 
 
 @dataclass(slots=True)
@@ -282,10 +297,24 @@ class OllamaBackend(LLMBackend):
         self.timeout = timeout
         self._transport = transport
         self._checked: tuple[bool, str] | None = None
+        self._served: list[str] | None = None
+        #: What ``auto`` resolved to, so the report names the model that answered.
+        self._resolved: str | None = None
+
+    @property
+    def resolved_model(self) -> str:
+        """The name sent to the daemon. ``auto`` resolves during :meth:`available`."""
+        return self._resolved or self.model
 
     @property
     def model_id(self) -> str:
-        return self.model
+        return self.resolved_model
+
+    def served_models(self) -> list[str]:
+        """What the daemon has, as of the last probe (may probe now)."""
+        if self._served is None:
+            self.available()
+        return list(self._served or [])
 
     def _client(self) -> httpx.Client:
         return httpx.Client(
@@ -309,8 +338,24 @@ class OllamaBackend(LLMBackend):
         except (ValueError, AttributeError):
             self._checked = (False, f"Ollama at {self.host} sent a response this code cannot read")
             return self._checked
+        self._served = models
         if not models:
             self._checked = (False, "Ollama is running but has no models (ollama pull llama3.2:1b)")
+            return self._checked
+        if self.model == OLLAMA_AUTO:
+            picked = _first_chat_model(models)
+            if not picked:
+                self._checked = (
+                    False,
+                    "Ollama only has embedding models, which cannot answer a question "
+                    "(ollama pull llama3.2:1b)",
+                )
+                return self._checked
+            self._resolved = picked
+            self._checked = (
+                True,
+                f"ready (auto-picked {picked} of {len(models)} model(s) on this daemon)",
+            )
             return self._checked
         if self.model not in models and f"{self.model}:latest" not in models:
             self._checked = (
@@ -318,12 +363,17 @@ class OllamaBackend(LLMBackend):
                 f"Ollama does not have {self.model} (available: {', '.join(models[:4])})",
             )
             return self._checked
+        self._resolved = self.model
         self._checked = (True, "ready")
         return self._checked
 
     def generate(self, messages: Sequence[dict[str, str]], *, context_text: str = "") -> str:
+        if self._resolved is None:
+            ok, reason = self.available()
+            if not ok:
+                raise UsageError(f"Ollama cannot answer: {reason}")
         payload = {
-            "model": self.model,
+            "model": self.resolved_model,
             "messages": list(messages),
             "stream": False,
             "options": {"temperature": self.temperature, "num_predict": self.max_tokens},
@@ -346,6 +396,237 @@ class OllamaBackend(LLMBackend):
         info = super().describe()
         info.update({"host": self.host, "local_only": True})
         return info
+
+
+def _first_chat_model(models: Sequence[str]) -> str:
+    """The first non-embedding model. Embedding models cannot answer a question."""
+    for name in models:
+        if name and "embed" not in name.lower():
+            return name
+    return ""
+
+
+# ---------------------------------------------------------------------------
+class CortexBackend(LLMBackend):
+    """A GGUF served by **Cortex LLM Hoster** over its OpenAI-compatible API.
+
+    Cortex supervises ``llama-server`` from llama.cpp and publishes
+    ``/v1/chat/completions``. The wire format is the one OpenAI popularised;
+    the model is a file on a machine you control, which is the whole difference
+    between this and a hosted API — no prompt leaves your network, and no
+    account or credit card is involved.
+
+    The host rule mirrors Ollama's, with one deliberate exception: a private
+    LAN address (10/8, 172.16/12, 192.168/16) is allowed *if you name it* with
+    ``--cortex-host``, because running the model on a home server is a normal
+    way to spare a 4 GB laptop. A public address is refused outright.
+    """
+
+    name = "cortex"
+
+    def __init__(
+        self,
+        model: str = CORTEX_DEFAULT_MODEL,
+        *,
+        host: str = CORTEX_DEFAULT_HOST,
+        api_key: str | None = None,
+        allow_lan: bool = False,
+        timeout: float = 120.0,
+        transport: httpx.BaseTransport | None = None,
+        max_tokens: int = 400,
+        temperature: float = 0.2,
+    ) -> None:
+        super().__init__(max_tokens=max_tokens, temperature=temperature)
+        refusal = cortex_host_refusal(host, allow_lan=allow_lan)
+        if refusal:
+            raise UsageError(refusal)
+        self.model = model
+        self.host = host.rstrip("/")
+        self.allow_lan = allow_lan
+        self.on_lan = not is_loopback_host(host)
+        # Cortex secures itself with a bearer key when CORTEX_API_KEY is set.
+        # Reading the environment is opt-out via api_key="" — unlike a hosted
+        # API, this key unlocks our own server, not someone else's account.
+        self._api_key = os.environ.get(CORTEX_API_KEY_ENV, "") if api_key is None else api_key
+        self.timeout = timeout
+        self._transport = transport
+        self._checked: tuple[bool, str] | None = None
+        self._served: list[str] | None = None
+        self._resolved: str | None = None
+
+    @property
+    def resolved_model(self) -> str:
+        """The model id sent to Cortex. ``auto`` resolves during :meth:`available`."""
+        return self._resolved or self.model
+
+    @property
+    def model_id(self) -> str:
+        return self.resolved_model
+
+    def served_models(self) -> list[str]:
+        """What Cortex serves, as of the last probe (may probe now)."""
+        if self._served is None:
+            self.available()
+        return list(self._served or [])
+
+    def _client(self) -> httpx.Client:
+        headers = {"Authorization": f"Bearer {self._api_key}"} if self._api_key else {}
+        return httpx.Client(
+            base_url=self.host,
+            timeout=self.timeout,
+            transport=self._transport,
+            headers=headers,
+        )
+
+    def available(self) -> tuple[bool, str]:
+        if self._checked is not None:
+            return self._checked
+        try:
+            with self._client() as client:
+                response = client.get("/v1/models")
+        except httpx.HTTPError as exc:
+            self._checked = (False, f"no Cortex server at {self.host} ({exc.__class__.__name__})")
+            return self._checked
+        if response.status_code == 401:
+            self._checked = (
+                False,
+                f"Cortex at {self.host} wants a bearer key (set {CORTEX_API_KEY_ENV})",
+            )
+            return self._checked
+        if response.status_code != 200:
+            self._checked = (False, f"Cortex at {self.host} answered {response.status_code}")
+            return self._checked
+        try:
+            served = [str(item.get("id", "")) for item in response.json().get("data", [])]
+        except (ValueError, AttributeError):
+            self._checked = (
+                False,
+                f"Cortex at {self.host} sent a /v1/models response this code cannot read",
+            )
+            return self._checked
+        self._served = [name for name in served if name]
+        if not self._served:
+            self._checked = (
+                False,
+                f"Cortex is running but serves no models (add a GGUF at {self.host})",
+            )
+            return self._checked
+        if self.model == OLLAMA_AUTO:
+            self._resolved = self._served[0]
+            self._checked = (
+                True,
+                f"ready (auto-picked {self._resolved} of {len(self._served)} model(s) on Cortex)",
+            )
+            return self._checked
+        if self.model not in self._served:
+            self._checked = (
+                False,
+                f"Cortex does not serve {self.model} (available: {', '.join(self._served[:4])})",
+            )
+            return self._checked
+        self._resolved = self.model
+        self._checked = (True, "ready")
+        return self._checked
+
+    def generate(self, messages: Sequence[dict[str, str]], *, context_text: str = "") -> str:
+        if self._resolved is None:
+            ok, reason = self.available()
+            if not ok:
+                raise UsageError(f"Cortex cannot answer: {reason}")
+        payload = {
+            "model": self.resolved_model,
+            "messages": list(messages),
+            "stream": False,
+            "temperature": self.temperature,
+            "max_tokens": self.max_tokens,
+        }
+        with self._client() as client:
+            response = client.post("/v1/chat/completions", json=payload)
+        if response.status_code == 401:
+            raise UsageError(
+                f"Cortex wants a bearer key (set {CORTEX_API_KEY_ENV} to the key you gave Cortex)"
+            )
+        if response.status_code != 200:
+            raise UsageError(f"Cortex answered {response.status_code}: {response.text[:200]}")
+        try:
+            data = response.json()
+        except ValueError as exc:  # pragma: no cover - malformed server response
+            raise UsageError("Cortex sent a response this code cannot read") from exc
+        choices = data.get("choices") or []
+        if not choices:
+            raise UsageError("Cortex returned no choices")
+        first = choices[0] or {}
+        message = first.get("message") or {}
+        text = str(message.get("content") or first.get("text") or "").strip()
+        if not text:
+            raise UsageError("Cortex returned an empty answer")
+        return text
+
+    def describe(self) -> dict[str, Any]:
+        info = super().describe()
+        info.update({"host": self.host, "local_only": not self.on_lan, "on_lan": self.on_lan})
+        return info
+
+
+#: The networks that mean "your own LAN". Listed literally rather than left to
+#: the stdlib's private-network predicate, which is broader than RFC1918 — it
+#: also answers True for the documentation ranges (203.0.113.0/24), link-local
+#: (169.254.0.0/16) and other reserved blocks that are not your home network.
+LAN_NETWORKS = (
+    ipaddress.ip_network("10.0.0.0/8"),
+    ipaddress.ip_network("172.16.0.0/12"),
+    ipaddress.ip_network("192.168.0.0/16"),
+)
+
+
+def is_private_lan_host(host: str) -> bool:
+    """True for an RFC1918 literal (10/8, 172.16/12, 192.168/16), not loopback.
+
+    Hostnames are not resolved: a name could point anywhere, and a DNS answer
+    is not something this decision should wait on or trust.
+    """
+    candidate = (host or "").strip().lower()
+    if "://" in candidate:
+        candidate = urlsplit(candidate).netloc
+    if "@" in candidate:
+        candidate = candidate.rsplit("@", 1)[-1]
+    if candidate.startswith("["):  # [::1]:8624
+        candidate = candidate[1:].split("]", 1)[0]
+    else:
+        candidate = candidate.split(":", 1)[0]
+    candidate = candidate.strip("[]")
+    try:
+        address = ipaddress.ip_address(candidate)
+    except ValueError:
+        return False
+    if address.is_loopback:
+        return False
+    return any(address in network for network in LAN_NETWORKS)
+
+
+def cortex_host_refusal(host: str, *, allow_lan: bool) -> str:
+    """Why a Cortex host is refused, or ``""`` when it is acceptable.
+
+    Loopback always passes. A private LAN address passes only when the caller
+    asked for it. Anything else — a public name, a cloud IP — is refused, for
+    the same reason Ollama refuses it: a "local model" that is really an HTTP
+    call to a company is data exfiltration with better wording.
+    """
+    if is_loopback_host(host):
+        return ""
+    if not is_private_lan_host(host):
+        return (
+            f"CortexBackend refuses the non-local host {host!r}: this chat is for a model "
+            "on this machine or on your own LAN, and pointing it at a public address "
+            "would send your footprint to someone else's server"
+        )
+    if not allow_lan:
+        return (
+            f"{host!r} is on your LAN but not on this machine. Name it on purpose with "
+            "--cortex-host HOST: the model and your prompt then travel over your "
+            "network instead of staying on loopback."
+        )
+    return ""
 
 
 # ---------------------------------------------------------------------------
@@ -433,6 +714,8 @@ def model_doctor(
     context_window: int = 2048,
     ollama_model: str = OLLAMA_DEFAULT_MODEL,
     ollama_host: str = OLLAMA_DEFAULT_HOST,
+    cortex_model: str = CORTEX_DEFAULT_MODEL,
+    cortex_host: str = CORTEX_DEFAULT_HOST,
 ) -> dict[str, Any]:
     """What would answer a question on this machine right now, and why."""
     probes: list[LLMBackend] = []
@@ -446,6 +729,13 @@ def model_doctor(
         OllamaBackend(ollama_model, host=ollama_host, transport=None)
         if is_loopback_host(ollama_host)
         else OllamaBackend(ollama_model, host=OLLAMA_DEFAULT_HOST)
+    )
+    # A LAN Cortex is only probed when the host was named on purpose; the doctor
+    # should not go knocking on the network by itself.
+    probes.append(
+        CortexBackend(cortex_model, host=cortex_host, allow_lan=cortex_host != CORTEX_DEFAULT_HOST)
+        if is_loopback_host(cortex_host) or is_private_lan_host(cortex_host)
+        else CortexBackend(cortex_model, host=CORTEX_DEFAULT_HOST)
     )
     probes.append(ExtractiveBackend())
     backends = [probe.describe() for probe in probes]
@@ -481,12 +771,13 @@ def backend_status() -> list[dict[str, Any]]:
     """Every backend and whether it could answer, without loading anything."""
     return [
         OllamaBackend().describe(),
+        CortexBackend().describe(),
         LlamaCppBackend(Path("model.gguf")).describe(),
         ExtractiveBackend().describe(),
     ]
 
 
-BACKENDS = ("llama_cpp", "ollama", "extractive")
+BACKENDS = ("llama_cpp", "ollama", "cortex", "extractive")
 
 
 def select_backend(
@@ -495,6 +786,10 @@ def select_backend(
     model_path: Path | str | None = None,
     ollama_model: str = OLLAMA_DEFAULT_MODEL,
     ollama_host: str = OLLAMA_DEFAULT_HOST,
+    cortex_model: str = CORTEX_DEFAULT_MODEL,
+    cortex_host: str = CORTEX_DEFAULT_HOST,
+    cortex_api_key: str | None = None,
+    allow_cortex_lan: bool = False,
     threads: int | None = None,
     context_window: int = 2048,
     ram_budget_mb: int = DEFAULT_RAM_BUDGET_MB,
@@ -505,9 +800,9 @@ def select_backend(
     """Pick a backend. Returns ``(backend, notes)`` — the notes explain fallbacks.
 
     ``auto`` prefers, in order: the GGUF you named, an Ollama model on this
-    machine, then retrieval. An explicit ``prefer`` that is unavailable raises
-    rather than silently degrading, because a user who typed ``--backend llama_cpp``
-    wants to know it did not happen.
+    machine, a model served by Cortex LLM Hoster, then retrieval. An explicit
+    ``prefer`` that is unavailable raises rather than silently degrading, because
+    a user who typed ``--backend llama_cpp`` wants to know it did not happen.
     """
     notes: list[str] = []
     candidates: dict[str, LLMBackend] = {
@@ -526,9 +821,18 @@ def select_backend(
             max_tokens=max_tokens,
             temperature=temperature,
         ),
+        "cortex": CortexBackend(
+            cortex_model,
+            host=cortex_host,
+            api_key=cortex_api_key,
+            allow_lan=allow_cortex_lan,
+            transport=transport,
+            max_tokens=max_tokens,
+            temperature=temperature,
+        ),
         "extractive": ExtractiveBackend(),
     }
-    order = ["llama_cpp", "ollama", "extractive"] if prefer == "auto" else [prefer]
+    order = ["llama_cpp", "ollama", "cortex", "extractive"] if prefer == "auto" else [prefer]
     if prefer != "auto" and prefer not in candidates:
         raise UsageError(f"unknown backend {prefer!r}; choose from {', '.join(BACKENDS)} or auto")
 

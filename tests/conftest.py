@@ -172,3 +172,45 @@ def pytest_collection_modifyitems(config: pytest.Config, items: Iterable[pytest.
 
 def pytest_configure(config: pytest.Config) -> None:
     config.addinivalue_line("markers", "network: performs real outbound HTTP requests")
+
+
+@pytest.fixture(autouse=True)
+def no_local_model_daemons(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Keep backend probes from finding a real daemon on the test machine.
+
+    :func:`~d3ta1l3r.llm.backends.select_backend` discovers models by asking
+    Ollama on ``127.0.0.1:11434`` and Cortex on ``127.0.0.1:8624`` what they
+    have. That makes any test asserting "with no model installed, the answer
+    comes from retrieval" depend on what happens to be running: it passes on a
+    bare machine and fails on a developer's laptop with Ollama installed, and
+    on a machine with neither it waits for a TCP refusal.
+
+    So a backend built *without* a transport — i.e. one that would really dial
+    out — gets a transport that refuses instantly, which is the same outcome as
+    a machine with no daemon, arrived at without a socket. Tests that supply
+    their own ``transport=`` are untouched and still exercise the real code.
+    """
+    from d3ta1l3r.llm import backends
+
+    original = {
+        backends.OllamaBackend: backends.OllamaBackend._client,
+        backends.CortexBackend: backends.CortexBackend._client,
+    }
+
+    def refuse(request: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectError("no daemon during tests", request=request)
+
+    def _make_offline(cls: Any) -> Any:
+        real = original[cls]
+
+        def _client(self: Any) -> httpx.Client:
+            if self._transport is not None:
+                return real(self)
+            return httpx.Client(
+                base_url=self.host, timeout=1.0, transport=httpx.MockTransport(refuse)
+            )
+
+        return _client
+
+    for cls in original:
+        monkeypatch.setattr(cls, "_client", _make_offline(cls))
