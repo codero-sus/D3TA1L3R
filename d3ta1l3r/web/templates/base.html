@@ -1,0 +1,63 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="robots" content="noindex,nofollow">
+  <title>{% block title %}{{ title }}{% endblock %}</title>
+  <link rel="stylesheet" href="/static/styles.css">
+</head>
+<body>
+  <header class="topbar">
+    <a class="brand" href="/">
+      <span class="brand-mark">D3</span>
+      <span class="brand-text">{{ title }}<em>self-audit</em></span>
+    </a>
+    <nav>
+      <a href="/">Dashboard</a>
+      <a href="/#watchlist">Watchlist</a>
+      <a href="/sources">Coverage</a>
+      <a href="/docs" title="OpenAPI docs">API</a>
+    </nav>
+    <span class="version">
+      {% if auth_enabled and signed_in %}
+      <form method="post" action="/logout" class="inline-form">
+        <button class="link" type="submit">sign out</button>
+      </form>
+      {% endif %}
+      v{{ version }}
+    </span>
+  </header>
+
+  {% if demo_default %}
+  <div class="banner warn">
+    <b>Demo mode is on.</b> Scans run against local fixtures: you will see realistic
+    findings, but no third-party site is contacted and nothing shown describes a real account.
+  </div>
+  {% endif %}
+
+  {% block hero %}{% endblock %}
+
+  <main>
+    {% block content %}{% endblock %}
+  </main>
+
+  <footer>
+    <p>
+      D3TA1L3R audits <b>your own</b> public footprint. It queries only public,
+      unauthenticated endpoints, obeys robots.txt, and reports sites it could not check as
+      gaps rather than guessing. Scan files and breach reports contain personal data —
+      delete them when you are done.
+    </p>
+    <p>
+      Password checks use k-anonymity: five characters of a SHA-1 hash leave this machine,
+      never the password. Breach data is never downloaded or bundled —
+      <a href="/docs">see <code>docs/SCOPE.md</code></a>.
+    </p>
+    <p><a href="/docs">OpenAPI</a> · <code>d3ta1l3r scan --help</code> for the CLI</p>
+  </footer>
+
+  <script src="/static/app.js"></script>
+  {% block scripts %}{% endblock %}
+</body>
+</html>

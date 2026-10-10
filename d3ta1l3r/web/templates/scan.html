@@ -1,0 +1,118 @@
+{% extends "base.html" %}
+{% set data = report_json %}
+{% block title %}{{ report.target.display() }} — {{ title }} report{% endblock %}
+
+{% block hero %}
+<section class="hero">
+  <h1>{{ report.target.display() }}</h1>
+  <p class="meta-line">
+    scan <code>{{ report.scan_id }}</code> ·
+    {{ report.started_at.strftime('%Y-%m-%d %H:%M:%SZ') }} ·
+    {{ '%.1f' | format(report.duration_ms / 1000) }}s ·
+    D3TA1L3R {{ report.tool_version }}
+    {% if report.demo %} · <span class="badge low">demo — synthetic data</span>{% endif %}
+  </p>
+  <p class="row-actions">
+    <a class="button" href="/api/scans/{{ report.scan_id }}/report.html">Standalone HTML</a>
+    <a class="button" href="/api/scans/{{ report.scan_id }}/report.md">Markdown</a>
+    <a class="button" href="/api/scans/{{ report.scan_id }}/report.json">JSON</a>
+    <button class="button danger" data-delete="{{ report.scan_id }}">Delete scan</button>
+  </p>
+</section>
+{% endblock %}
+
+{% block content %}
+<section class="stats">
+  <div class="stat"><b>{{ data.stats.findings_total }}</b><span>findings</span></div>
+  <div class="stat"><b>{{ data.stats.sources_hit }}</b><span>sources with results</span></div>
+  <div class="stat"><b>{{ data.stats.sources_skipped }}</b><span>skipped</span></div>
+  <div class="stat"><b>{{ data.stats.sources_failed }}</b><span>failed</span></div>
+  <div class="stat"><b>{{ data.stats.hosts_contacted }}</b><span>hosts contacted</span></div>
+  <div class="stat"><b>{{ data.stats.http_requests }}</b><span>http requests</span></div>
+</section>
+
+{% if data.warnings %}
+<section>
+  <h2>Caveats</h2>
+  {% for warning in data.warnings %}
+  <div class="banner warn">{{ warning }}</div>
+  {% endfor %}
+</section>
+{% endif %}
+
+<section>
+  <h2>Findings</h2>
+  {% if not data.outcomes %}
+  <p class="muted">No outcomes were recorded for this scan.</p>
+  {% elif grouped %}
+    {% for category, findings in grouped.items() %}
+    <h3>{{ category }} — {{ findings | length }}</h3>
+      {% for finding in findings %}
+      <article class="card">
+        {% if finding.avatar_url %}<img class="avatar" src="{{ finding.avatar_url }}" alt="">{% endif %}
+        <h4>
+          <span class="badge {{ finding.confidence }}">{{ finding.confidence | upper }}</span>
+          {% if finding.url %}<a href="{{ finding.url }}" rel="noopener noreferrer nofollow">{{ finding.title or finding.source_name }}</a>
+          {% else %}{{ finding.title or finding.source_name }}{% endif %}
+        </h4>
+        <p class="evidence">{{ finding.evidence }}</p>
+        <dl class="facts">
+          {% if finding.display_name %}<dt>Name</dt><dd>{{ finding.display_name }}</dd>{% endif %}
+          {% if finding.bio %}<dt>Bio</dt><dd>{{ finding.bio | striptags | truncate(240) }}</dd>{% endif %}
+          {% if finding.location %}<dt>Location</dt><dd>{{ finding.location }}</dd>{% endif %}
+          {% if finding.account_created_at %}<dt>Created</dt><dd>{{ finding.account_created_at }}</dd>{% endif %}
+          {% if finding.extra.get('exposure') %}
+          <dt>Exposed</dt><dd>{{ finding.extra.get('exposure') | join('; ') }}</dd>
+          {% endif %}
+          {% if finding.extra.get('homonym_warning') %}
+          <dt>Warning</dt><dd class="warn-text">Name matches are not identity — confirm before acting.</dd>
+          {% endif %}
+          <dt>Source</dt><dd class="mono">{{ finding.source_id }}</dd>
+        </dl>
+      </article>
+      {% endfor %}
+    {% endfor %}
+  {% else %}
+  <p class="muted">
+    Nothing located on the sources that ran. Read the coverage table below before concluding you
+    are invisible: skipped, blocked and failed sources are <b>unknown</b>, not clean.
+  </p>
+  {% endif %}
+</section>
+
+<section>
+  <h2>Coverage — what was checked, and what happened</h2>
+  {% for kind in ['username', 'email', 'name', 'domain'] %}
+    {% set outcomes = data.outcomes | selectattr('kind', 'equalto', kind) | list %}
+    {% if outcomes %}
+    <h3>{{ kind }} sources — {{ outcomes | length }}</h3>
+    <table class="coverage">
+      <thead><tr><th>Result</th><th>Source</th><th>HTTP</th><th>Time</th><th>Detail</th></tr></thead>
+      <tbody>
+        {% for outcome in outcomes %}
+        <tr class="{{ outcome.status }}">
+          <td class="status">{{ outcome.status | replace('_', ' ') }}</td>
+          <td>
+            <a href="{{ outcome.query_url or outcome.docs_url or '#' }}" rel="noopener noreferrer nofollow">{{ outcome.source_name }}</a>
+            <div class="mono muted">{{ outcome.source_id }}</div>
+          </td>
+          <td>{{ outcome.http_status or '—' }}</td>
+          <td>{{ outcome.duration_ms }} ms</td>
+          <td>{% if outcome.findings %}{{ outcome.findings | length }} finding(s){% else %}{{ outcome.error or outcome.skipped_reason or '' }}{% endif %}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    {% endif %}
+  {% endfor %}
+</section>
+
+<section>
+  <h2>Reproducibility</h2>
+  <table class="facts-table">
+    {% for key, value in report.options.items() %}
+    <tr><th>{{ key }}</th><td class="mono">{{ value }}</td></tr>
+    {% endfor %}
+  </table>
+</section>
+{% endblock %}

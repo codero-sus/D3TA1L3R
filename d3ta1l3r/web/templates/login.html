@@ -1,0 +1,68 @@
+{% extends "base.html" %}
+{% block title %}{{ title }} — sign in{% endblock %}
+
+{% block hero %}
+<section class="hero">
+  <h1>Sign in</h1>
+  <p>
+    This dashboard can reach your encrypted watchlist, so it asks for the
+    <b>vault passphrase</b> before it serves anything. There is no second password to
+    remember: the passphrase you type is the one that decrypts
+    <code>{{ title }}</code>'s local vault.
+  </p>
+</section>
+{% endblock %}
+
+{% block content %}
+<section class="grid">
+  <div class="panel narrow">
+    <h2>Unlock the dashboard</h2>
+
+    {% if error %}
+    <div class="banner error" role="alert">{{ error }}</div>
+    {% endif %}
+
+    {% if locked_for %}
+    <div class="banner warn">
+      Too many failed attempts from this address. Try again in {{ locked_for }}s.
+    </div>
+    {% endif %}
+
+    <form method="post" action="/login" autocomplete="off">
+      <input type="hidden" name="next" value="{{ next_path }}">
+      <label>Vault passphrase
+        <input type="password" name="passphrase" autofocus required
+               autocomplete="current-password" spellcheck="false">
+      </label>
+      <div class="actions">
+        <button type="submit">Unlock</button>
+      </div>
+    </form>
+
+    <p class="fineprint">
+      The passphrase is verified by re-deriving a scrypt key and comparing it in constant
+      time; nothing is stored, and a wrong guess costs the same as a correct one.
+      After {{ max_attempts }} failures the address is locked out for a few minutes.
+      If you have forgotten the passphrase there is no recovery: the vault is encrypted,
+      so the only option is to delete it and start a new watchlist.
+    </p>
+  </div>
+
+  <div class="panel">
+    <h2>What signing in does</h2>
+    <ul class="clean">
+      <li><b>Runs a breach check</b> on your watchlist — every email, phone number and
+        handle is re-checked against the configured sources each time you log in.</li>
+      <li><b>Opens the dashboard</b>: scans, coverage, and the watchlist itself (masked).</li>
+      <li><b>Keeps secrets off disk.</b> Passwords are checked in memory with k-anonymity
+        and never stored; only a keyed fingerprint is.</li>
+    </ul>
+    <h3>Before you sign in</h3>
+    <ul class="clean muted">
+      <li>Sessions last {{ (session_hours if session_hours is defined else 8) }} hours, then expire.</li>
+      <li>Sessions end when the server restarts — the session key is per process.</li>
+      <li>Run the CLI instead with <code>d3ta1l3r breach</code> if you would rather not use a browser.</li>
+    </ul>
+  </div>
+</section>
+{% endblock %}

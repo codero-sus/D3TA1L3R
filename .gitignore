@@ -1,0 +1,39 @@
+# --- Python ---
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+.venv/
+venv/
+env/
+.python-version
+
+# --- Tooling caches ---
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+
+# --- D3TA1L3R runtime output ---
+# Generated scans are evidence data: they may contain personal data and must
+# not be committed. Keep them out of version control by default.
+scans/
+.cache/
+*.d3ta1l3r.json
+
+# --- Model weights (fetched by `d3ta1l3r models pull`, never committed) ---
+*.gguf
+*.gguf.part
+
+# --- Updater configuration (machine-local; see python.env.example) ---
+# The path to your Python is specific to this machine, so the real file is not
+# tracked. Only python.env.example is committed.
+python.env
+
+# --- Editors / OS ---
+.idea/
+.vscode/
+.DS_Store
