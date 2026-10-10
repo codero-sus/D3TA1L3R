@@ -255,6 +255,15 @@ The request is one unauthenticated, key-free `GET`, like every other source
 here. It carries no identifier of yours — no handle, no email, no version of a
 scan — so it reveals only that someone at this address runs D3TA1L3R.
 
+`updater.sh` and `updater.bat` in the repository root are wrappers, not a second
+implementation. They find the project's virtualenv (or `d3ta1l3r` on `PATH`, or
+any interpreter that can import the package), pass your arguments through, and
+fall back to the same git or pip command if no CLI exists. They contain no
+version logic of their own, because a supply-chain decision written three times
+is a decision that drifts in two of them. Tests assert what they must *not*
+contain: no `curl | sh`, no `Invoke-Expression`, no `eval`, no disabled TLS
+verification, and no release API of their own.
+
 ## 3. Why the limits are where they are
 
 - **Public ≠ fair game.** Publicly reachable data about a person is still
