@@ -261,6 +261,17 @@ class TestReadme:
         assert "browser_download_url" not in body
         assert "assets" not in body, "release assets must never be read, let alone installed"
 
+    def test_branch_updating_is_documented(self) -> None:
+        """A project with no releases must not have a dead updater."""
+        readme = _read("README.md")
+        scope = _read("docs/SCOPE.md")
+        for text in (readme, scope):
+            assert "--branch" in text
+            assert "D3TA1L3R_UPDATE_BRANCH" in text
+        assert "--ff-only" in readme, "the fast-forward must be named in the docs too"
+        # the two modes are told apart in the output
+        assert '"mode"' in readme or "mode" in scope
+
     def test_the_updater_wrappers_are_documented(self) -> None:
         readme = _read("README.md")
         scope = _read("docs/SCOPE.md")
