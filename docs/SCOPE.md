@@ -255,14 +255,34 @@ The request is one unauthenticated, key-free `GET`, like every other source
 here. It carries no identifier of yours — no handle, no email, no version of a
 scan — so it reveals only that someone at this address runs D3TA1L3R.
 
-`updater.sh` and `updater.bat` in the repository root are wrappers, not a second
-implementation. They find the project's virtualenv (or `d3ta1l3r` on `PATH`, or
-any interpreter that can import the package), pass your arguments through, and
-fall back to the same git or pip command if no CLI exists. They contain no
-version logic of their own, because a supply-chain decision written three times
-is a decision that drifts in two of them. Tests assert what they must *not*
-contain: no `curl | sh`, no `Invoke-Expression`, no `eval`, no disabled TLS
-verification, and no release API of their own.
+`updater.sh` (Linux, macOS, WSL) and `updater.bat` (Windows) in the repository
+root are wrappers, not a second implementation. They find a Python, pass your
+arguments through, and fall back to the same git or pip command if no CLI
+exists. They contain no version logic of their own, because a supply-chain
+decision written three times is a decision that drifts in two of them.
+
+Which Python they use, first match wins: the `2PY2` environment variable, then
+`D3TA1L3R_PYTHON`, then a `python.env` file beside the wrapper, then
+`.venv`, then `d3ta1l3r` on `PATH`, then any interpreter that can import the
+package. The first three exist because portable and embeddable builds are
+usually not on `PATH`.
+
+`2PY2` means "a second Python", not Python 2 — and the digit is a real
+constraint: `${2PY2}` is a bad substitution in bash and zsh, a bare `$2PY2`
+silently expands to positional parameter 2 plus the text `PY2`, and
+`export 2PY2=...` is rejected outright. The scripts therefore read it with
+`printenv`, which has no identifier rules, and `D3TA1L3R_PYTHON` is accepted as
+an alias for anyone who would rather use a name they can export. A configured
+interpreter is verified before being trusted; one that cannot `import d3ta1l3r`
+is reported and skipped rather than becoming a dead end.
+
+`python.env` is machine-local and gitignored, so a path specific to your machine
+never ends up in a commit; only `python.env.example` is tracked.
+
+Tests assert what the wrappers must *not* contain: no `curl | sh`, no
+`Invoke-Expression`, no `eval`, no disabled TLS verification, and no release API
+of their own. The bans are checked against code with comments stripped, since
+the scripts explain why they avoid those things.
 
 ## 3. Why the limits are where they are
 
