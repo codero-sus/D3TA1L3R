@@ -261,6 +261,13 @@ class TestReadme:
         assert "browser_download_url" not in body
         assert "assets" not in body, "release assets must never be read, let alone installed"
 
+    def test_the_updater_wrappers_are_documented(self) -> None:
+        readme = _read("README.md")
+        scope = _read("docs/SCOPE.md")
+        assert "updater.sh" in readme and "updater.bat" in readme
+        assert "updater.sh" in scope and "updater.bat" in scope
+        assert "wrapper" in scope.lower(), "they must be described as wrappers, not a 2nd impl"
+
     def test_auto_model_selection_is_documented(self) -> None:
         scope = _read("docs/SCOPE.md")
         assert "auto" in scope

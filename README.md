@@ -405,6 +405,21 @@ clone, `pip install --upgrade d3ta1l3r` for a packaged install. This project is
 not published to PyPI yet, so today everything is a clone and the pip branch is
 what a future packaged install will take.
 
+Two wrappers in the repository root do the same thing without asking you to
+remember which Python is the right one. They locate the project's `.venv` (or
+`d3ta1l3r` on `PATH`, or any interpreter that can import the package) and hand
+your arguments straight through:
+
+```bash
+./updater.sh --check        # Linux/macOS/WSL
+updater.bat --check         # Windows
+```
+
+They are wrappers, not a second implementation: the version comparison and the
+refusal rules stay in one tested place. If no CLI can be found they fall back to
+the same two commands above, and like the Python path they never fetch a release
+archive and execute it.
+
 An updater in a security tool is a supply-chain decision rather than a
 convenience, so this one is deliberately reluctant:
 
