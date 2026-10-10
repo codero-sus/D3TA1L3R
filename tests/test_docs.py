@@ -45,6 +45,7 @@ class TestReadme:
             "web",
             "ask",
             "models",
+            "update",
         }
         readme = _read("README.md")
         for command in commands:
@@ -237,6 +238,28 @@ class TestReadme:
             "use the LAN_NETWORKS table: ipaddress.is_private is broader than RFC1918 "
             "and would also accept the documentation ranges and link-local"
         )
+
+    def test_the_updater_promises_are_documented(self) -> None:
+        scope = _read("docs/SCOPE.md").lower()
+        readme = _read("README.md").lower()
+        for text in (scope, readme):
+            assert "d3ta1l3r update" in text
+        # the four promises that make it a supply-chain decision, not a convenience
+        assert "sys.executable" in scope, "the pip call must target the running interpreter"
+        assert "--ff-only" in scope, "git updates must not rewrite history"
+        assert "pre-release" in scope, "a pre-release must never install automatically"
+        assert "never a shell string" in scope or "not a shell string" in scope
+
+    def test_the_updater_never_executes_a_downloaded_asset(self) -> None:
+        """The one thing an updater must not do is fetch code and run it."""
+        body = (ROOT / "d3ta1l3r" / "updater.py").read_text(encoding="utf-8")
+        assert "curl" not in body
+        assert "urlretrieve" not in body
+        assert "shell=True" not in body
+        # the only thing fetched is JSON metadata: never a release asset
+        assert "/releases/latest" in body
+        assert "browser_download_url" not in body
+        assert "assets" not in body, "release assets must never be read, let alone installed"
 
     def test_auto_model_selection_is_documented(self) -> None:
         scope = _read("docs/SCOPE.md")

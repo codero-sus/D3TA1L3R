@@ -76,6 +76,7 @@ from .models import (
     ScanStatus,
     ScanTarget,
 )
+from .updater import apply_update, check_for_update, dumps_json
 from .vault import (
     Vault,
     VaultEntry,
@@ -502,7 +503,99 @@ def build_parser() -> argparse.ArgumentParser:
 
     path_cmd = models_sub.add_parser("path", help="where models live, and how much space is free")
     path_cmd.add_argument("--json", action="store_true")
+
+    update = sub.add_parser(
+        "update",
+        help="check for a newer D3TA1L3R, and apply it if you say so",
+        description=(
+            "Asks GitHub's public releases API what the newest version is and "
+            "compares it with what is running. Nothing is checked unless you run "
+            "this command, and nothing is installed until you confirm."
+        ),
+    )
+    update.add_argument("--check", action="store_true",
+                        help="report only; never offer to install anything")
+    update.add_argument("--yes", "-y", action="store_true",
+                        help="apply the update without asking (never a pre-release)")
+    update.add_argument("--pre", action="store_true",
+                        help="allow a pre-release to be installed")
+    update.add_argument("--timeout", type=float, default=15.0, metavar="SECONDS",
+                        help="how long to wait for the release API (default 15)")
+    update.add_argument("--json", action="store_true", dest="as_json")
     return parser
+
+
+# ---------------------------------------------------------------------------
+def cmd_update(args: argparse.Namespace) -> int:
+    """Report the newest release, and install it only when told to.
+
+    The order here is the point: what was found, then what would be run, then
+    the question. A prompt that appears before the command it will run is asking
+    you to authorise something you have not been shown.
+    """
+    info = check_for_update(timeout=args.timeout)
+    if args.as_json:
+        print(dumps_json(info))
+        return EXIT_OK
+
+    where = {"git": "a git clone", "pip": "pip-installed", "unknown": "an unknown install"}
+    print(f"this copy: {info.current} ({where.get(info.kind, info.kind)})")
+    if not info.reachable:
+        print(f"  {info.message}")
+        return EXIT_FAILURE
+    if not info.latest:
+        print(f"  {info.message or 'no published releases yet'}")
+        return EXIT_OK
+    if not info.available:
+        print(f"  {info.message}")
+        return EXIT_OK
+
+    print(f"newest release: {info.latest}{'  (pre-release)' if info.prerelease else ''}")
+    if info.published_at:
+        print(f"  published: {info.published_at[:10]}")
+    print(f"  notes:     {info.url}")
+    if info.notes:
+        lines = info.notes.splitlines()
+        for line in lines[:12]:
+            if line.strip():
+                print(f"    {line}")
+        if len(lines) > 12:
+            print(f"    ... {len(lines) - 12} more line(s) at the URL above")
+
+    if not info.command:
+        print(
+            "\nThis copy is not a clone and not a pip package, so there is no update "
+            f"command to run.\nDownload {info.latest} from {info.url}."
+        )
+        return EXIT_OK
+    print(f"\nwould run: {' '.join(info.command)}")
+
+    if args.check:
+        print("(--check: nothing installed. Run `d3ta1l3r update` to apply it.)")
+        return EXIT_OK
+    if info.prerelease and not args.pre:
+        # Refused before running anything, so the message is about the choice
+        # rather than about a command that never executed. apply_update repeats
+        # this check: a caller that skips it still cannot install a pre-release.
+        print(
+            f"\n{info.latest} is a pre-release, so it is not installed automatically. "
+            "Pass --pre to take it, or wait for the stable tag."
+        )
+        return EXIT_FAILURE
+    if not args.yes:
+        print(f"Install {info.latest}? [y/N] ", end="", flush=True)
+        if input().strip().lower() not in {"y", "yes"}:
+            print("left it alone — nothing was installed.")
+            return EXIT_OK
+
+    code, output = apply_update(info, allow_prerelease=args.pre)
+    if output:
+        print(output)
+    if code != 0:
+        print(f"\nthe update command exited {code}; this copy is still {info.current}.")
+        return EXIT_FAILURE
+    print(f"\nupdated. Restart D3TA1L3R to run {info.latest} (`d3ta1l3r --version`).")
+    return EXIT_OK
 
 
 # ---------------------------------------------------------------------------
@@ -530,6 +623,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             return cmd_ask(args)
         if args.command == "models":
             return cmd_models(args)
+        if args.command == "update":
+            return cmd_update(args)
     except UsageError as exc:
         print(f"error: {exc}", file=sys.stderr)
         return EXIT_USAGE

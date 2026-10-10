@@ -216,6 +216,45 @@ one feature that tries to answer that question is fenced accordingly:
   implemented, and should not be described as working. Until then, treat every
   verdict as what it is: a language model's opinion about a URL.
 
+## 2e. Updating: delegation, not download-and-execute
+
+`d3ta1l3r update` checks GitHub's public releases API for a newer version. An
+updater is a supply-chain decision rather than a convenience, so the rules are
+the strict ones:
+
+- **Nothing is checked unless you run it.** No check on startup, none during a
+  scan, no telemetry, no background timer. A self-audit tool that phones home on
+  every invocation leaks when you audit and what version you patch from.
+- **Report, then command, then question — in that order.** The version, the
+  release notes, the URL and the exact argv are printed before anything is
+  asked. `--check` never offers to install at all.
+- **No release asset is ever downloaded and executed.** Fetching a tarball over
+  HTTPS and installing it by hand would replace the trust already placed in PyPI
+  or in your clone with trust in whoever can answer for the hostname. The work
+  is delegated: `pip install --upgrade d3ta1l3r` for a packaged install,
+  `git pull --ff-only` for a clone. Both are relationships you already accepted
+  when you installed it the first time. `--ff-only` additionally means a dirty
+  or diverged clone fails loudly rather than producing a tree neither side can
+  describe.
+- **The command is a list, never a shell string**, and it invokes
+  `sys.executable -m pip` so the upgrade lands in the interpreter running this
+  code, not whichever `pip` is first on `PATH`. `subprocess` is called with no
+  `shell=`, and a test asserts that.
+- **A pre-release is never installed automatically.** `--yes` accepts `0.2.0`
+  and refuses `0.2.0-rc1`; `--pre` opts in.
+- **Versions compare numerically**, not as text: `"0.10.0" < "0.9.0"` as strings,
+  which would report you as current when you are two releases behind.
+- **Unknown installs get no guess.** If this copy is neither a clone nor a
+  packaged install, the command prints where to get the release instead of
+  inventing one.
+- **An unreachable API is a failure, not a shrug.** The check exits non-zero and
+  prints the releases URL. GitHub's unauthenticated limit (60/hour per IP) is
+  reported rather than retried.
+
+The request is one unauthenticated, key-free `GET`, like every other source
+here. It carries no identifier of yours — no handle, no email, no version of a
+scan — so it reveals only that someone at this address runs D3TA1L3R.
+
 ## 3. Why the limits are where they are
 
 - **Public ≠ fair game.** Publicly reachable data about a person is still

@@ -107,6 +107,10 @@ d3ta1l3r models pull qwen2.5-1.5b-instruct-q4_k_m   # asks, then downloads, then
 
 # 11. Optionally, let that model give a second opinion on who is who
 d3ta1l3r ask --verify --about "my bios mention chess and Berlin" --only-uncertain
+
+# 12. See whether a newer D3TA1L3R exists — and install it only if you say so
+d3ta1l3r update --check             # reports, changes nothing
+d3ta1l3r update                     # shows the release and the command, then asks
 ```
 
 Reports land in `./scans/` as `20261005T091500Z-<target>-<scan_id>.{json,md,html}`.
@@ -386,6 +390,48 @@ namesake with a similar profile, and a wrong "looks like you" is more likely
 than a wrong finding. A cryptographic check — a DNS `TXT` record, a `rel=me`
 link, a token posted in a profile you control — would be stronger evidence, and
 is not implemented yet; `docs/SCOPE.md` records it as a known gap.
+
+## Staying current
+
+```bash
+d3ta1l3r update --check     # report the newest release; change nothing
+d3ta1l3r update             # show it, show the command, ask, then act
+d3ta1l3r update --yes       # non-interactive (still never a pre-release)
+d3ta1l3r update --json      # for scripts: {"update_available": true, ...}
+```
+
+The command comes from how you installed it: `git pull --ff-only` inside a
+clone, `pip install --upgrade d3ta1l3r` for a packaged install. This project is
+not published to PyPI yet, so today everything is a clone and the pip branch is
+what a future packaged install will take.
+
+An updater in a security tool is a supply-chain decision rather than a
+convenience, so this one is deliberately reluctant:
+
+- **Nothing is checked unless you run it.** No check on startup, none during a
+  scan, no telemetry, no background timer. A self-audit tool that phones home on
+  every run leaks *when* you audit and *which version* you patch from.
+- **It reports before it changes anything.** The version, the release notes, the
+  URL and the exact command are printed, and only then does it ask. `--check`
+  never offers to install at all.
+- **It never downloads and executes a release asset.** A tarball fetched over
+  HTTPS and installed by hand would replace the trust you already placed in PyPI
+  or your clone with trust in whoever can answer for a hostname. The work is
+  delegated instead: `pip install --upgrade d3ta1l3r` for an installed package,
+  `git pull --ff-only` for a clone — the same relationship you accepted when you
+  installed it the first time.
+- **The command is a list, never a shell string**, and it runs
+  `sys.executable -m pip` so the upgrade lands in the interpreter actually
+  running this code rather than whichever `pip` is first on `PATH`.
+- **A pre-release is never installed automatically.** `--yes` takes `0.2.0` but
+  stops at `0.2.0-rc1`; `--pre` opts in.
+- **Versions are compared numerically.** `"0.10.0" < "0.9.0"` as text, which
+  would tell you that you are current when you are two releases behind.
+
+The only request is a `GET` to the public GitHub releases API — unauthenticated
+and key-free, like every other source here. GitHub's unauthenticated limit
+(60/hour per IP) is reported rather than retried. If the check cannot reach the
+API it says so and exits non-zero, and tells you the URL to look at yourself.
 
 ## Watching for changes
 
