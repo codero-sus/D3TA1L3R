@@ -255,6 +255,29 @@ The request is one unauthenticated, key-free `GET`, like every other source
 here. It carries no identifier of yours — no handle, no email, no version of a
 scan — so it reveals only that someone at this address runs D3TA1L3R.
 
+**A clone is compared by commit, not by release.** This project publishes no
+releases, so the releases API has nothing to say about a checkout and the
+feature would be dead code for exactly the people most likely to run it.
+Instead `update` lists the newest commits on a branch and reports how far behind
+you are, which is the position of your own HEAD in that list. The branch
+defaults to the one checked out, overridable with `--branch NAME` or
+`$D3TA1L3R_UPDATE_BRANCH`.
+
+- The remote and branch are named explicitly in the command
+  (`git pull --ff-only origin <branch>`) rather than left to the branch's
+  upstream: a fresh clone of a branch frequently has no upstream configured, and
+  a bare `git pull` would report that instead of fetching.
+- `--ff-only` is kept, so a dirty or diverged clone fails loudly rather than
+  producing a tree neither side can describe.
+- A detached HEAD, an unknown branch and an unreachable API are all reported
+  rather than guessed at; a checkout whose HEAD cannot be read is not compared
+  at all, because "0 commits behind" would be a lie.
+- Only the commits you are missing are listed. More than a page behind is
+  reported as "more than 20", not as a number the tool did not actually count.
+
+A packaged install still uses the releases API; the two modes are distinct in
+the output (`--json` carries `"mode"`).
+
 `updater.sh` (Linux, macOS, WSL) and `updater.bat` (Windows) in the repository
 root are wrappers, not a second implementation. They find a Python, pass your
 arguments through, and fall back to the same git or pip command if no CLI

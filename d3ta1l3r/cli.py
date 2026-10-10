@@ -76,7 +76,15 @@ from .models import (
     ScanStatus,
     ScanTarget,
 )
-from .updater import apply_update, check_for_update, dumps_json
+from .updater import (
+    BRANCH_ENV,
+    apply_update,
+    check_branch_updates,
+    check_for_update,
+    dumps_json,
+    install_kind,
+    resolve_branch,
+)
 from .vault import (
     Vault,
     VaultEntry,
@@ -508,9 +516,10 @@ def build_parser() -> argparse.ArgumentParser:
         "update",
         help="check for a newer D3TA1L3R, and apply it if you say so",
         description=(
-            "Asks GitHub's public releases API what the newest version is and "
-            "compares it with what is running. Nothing is checked unless you run "
-            "this command, and nothing is installed until you confirm."
+            "In a clone: compares this checkout with the head of a branch and "
+            "fast-forwards to it. In a packaged install: asks GitHub's public "
+            "releases API for the newest version. Nothing is checked unless you "
+            "run this command, and nothing is installed until you confirm."
         ),
     )
     update.add_argument("--check", action="store_true",
@@ -519,10 +528,49 @@ def build_parser() -> argparse.ArgumentParser:
                         help="apply the update without asking (never a pre-release)")
     update.add_argument("--pre", action="store_true",
                         help="allow a pre-release to be installed")
+    update.add_argument("--branch", default="", metavar="NAME",
+                        help="follow this branch instead of the checked-out one "
+                             f"(default: the current branch, or ${BRANCH_ENV})")
     update.add_argument("--timeout", type=float, default=15.0, metavar="SECONDS",
                         help="how long to wait for the release API (default 15)")
     update.add_argument("--json", action="store_true", dest="as_json")
     return parser
+
+
+# ---------------------------------------------------------------------------
+def _report_branch_update(args: argparse.Namespace, info: Any) -> int:
+    """Show the commits a fast-forward would bring in, then ask."""
+    print(f"origin/{info.branch}: {info.message}")
+    if info.commits:
+        for item in info.commits[:12]:
+            print(f"    {item['sha']}  {item.get('date', '')}  {item.get('message', '')}")
+        hidden = len(info.commits) - 12
+        if hidden > 0:
+            print(f"    ... {hidden} more, see {info.url}")
+    print(f"  history:    {info.url}")
+
+    if not info.command:
+        print(f"\nNo update command for this checkout; see {info.url}.")
+        return EXIT_OK
+    print(f"\nwould run: {' '.join(info.command)}")
+
+    if args.check:
+        print("(--check: nothing installed. Run `d3ta1l3r update` to apply it.)")
+        return EXIT_OK
+    if not args.yes:
+        print(f"Fast-forward to {info.latest}? [y/N] ", end="", flush=True)
+        if input().strip().lower() not in {"y", "yes"}:
+            print("left it alone — nothing was fetched or merged.")
+            return EXIT_OK
+
+    code, output = apply_update(info)
+    if output:
+        print(output)
+    if code != 0:
+        print(f"\nthe update command exited {code}; this copy is still {info.current}.")
+        return EXIT_FAILURE
+    print(f"\nupdated to {info.latest}. Restart D3TA1L3R to run the new code.")
+    return EXIT_OK
 
 
 # ---------------------------------------------------------------------------
@@ -533,7 +581,13 @@ def cmd_update(args: argparse.Namespace) -> int:
     the question. A prompt that appears before the command it will run is asking
     you to authorise something you have not been shown.
     """
-    info = check_for_update(timeout=args.timeout)
+    # A clone is compared by commit, not by release: this project ships no
+    # releases, so the releases API has nothing to say about a checkout.
+    branch = resolve_branch(getattr(args, "branch", "")) if install_kind() == "git" else ""
+    if branch:
+        info = check_branch_updates(branch, timeout=args.timeout)
+    else:
+        info = check_for_update(timeout=args.timeout)
     if args.as_json:
         print(dumps_json(info))
         return EXIT_OK
@@ -549,6 +603,9 @@ def cmd_update(args: argparse.Namespace) -> int:
     if not info.available:
         print(f"  {info.message}")
         return EXIT_OK
+
+    if info.mode == "branch":
+        return _report_branch_update(args, info)
 
     print(f"newest release: {info.latest}{'  (pre-release)' if info.prerelease else ''}")
     if info.published_at:

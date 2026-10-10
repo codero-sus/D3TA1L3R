@@ -394,11 +394,36 @@ is not implemented yet; `docs/SCOPE.md` records it as a known gap.
 ## Staying current
 
 ```bash
-d3ta1l3r update --check     # report the newest release; change nothing
+d3ta1l3r update --check     # report what is new; change nothing
 d3ta1l3r update             # show it, show the command, ask, then act
 d3ta1l3r update --yes       # non-interactive (still never a pre-release)
 d3ta1l3r update --json      # for scripts: {"update_available": true, ...}
 ```
+
+**In a clone it follows the branch you are on.** This project publishes no
+releases yet, so a release-based check has nothing to report; instead the
+checkout is compared with the head of the branch — by default the one you have
+checked out, or `--branch NAME`, or `$D3TA1L3R_UPDATE_BRANCH`:
+
+```
+$ d3ta1l3r update
+this copy: 02cace242a91 (a git clone)
+origin/arena/01a10bdb-d3ta1l3r: 3 commit(s) behind origin/arena/01a10bdb-d3ta1l3r
+    02cace24  2026-10-10  Let the updater wrappers use a configured Python
+    ...
+would run: git -C /home/user/D3TA1L3R pull --ff-only origin arena/01a10bdb-d3ta1l3r
+Fast-forward to 02cace242a91? [y/N]
+```
+
+How far behind you are is simply where your own HEAD appears in the newest-first
+commit list; only the commits you are missing are shown. The remote and branch
+are named explicitly rather than left to the branch's upstream, because a fresh
+clone of a branch often has no upstream configured and a bare `git pull` would
+say so instead of fetching. `--ff-only` still means a dirty or diverged clone
+fails loudly instead of producing a tree neither of us can describe.
+
+A packaged install keeps using the releases API, and the two modes are reported
+separately (`--json` carries `"mode": "branch"` or `"release"`).
 
 The command comes from how you installed it: `git pull --ff-only` inside a
 clone, `pip install --upgrade d3ta1l3r` for a packaged install. This project is
