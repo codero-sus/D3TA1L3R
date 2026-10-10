@@ -41,7 +41,8 @@ class TestParser:
         assert parser.prog == "d3ta1l3r"
         subparsers = [action for action in parser._actions if action.dest == "command"]
         assert subparsers and set(subparsers[0].choices) == {
-            "scan", "sources", "calibrate", "diff", "vault", "breach", "web", "ask", "models"
+            "scan", "sources", "calibrate", "diff", "vault", "breach", "web", "ask",
+            "models", "update",
         }
 
 
