@@ -28,6 +28,11 @@ scans/
 *.gguf
 *.gguf.part
 
+# --- Updater configuration (machine-local; see python.env.example) ---
+# The path to your Python is specific to this machine, so the real file is not
+# tracked. Only python.env.example is committed.
+python.env
+
 # --- Editors / OS ---
 .idea/
 .vscode/

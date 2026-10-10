@@ -420,6 +420,45 @@ refusal rules stay in one tested place. If no CLI can be found they fall back to
 the same two commands above, and like the Python path they never fetch a release
 archive and execute it.
 
+### Which Python, when yours is not on `PATH`
+
+Portable and embeddable builds usually are not. Both wrappers look for one in
+this order, first match wins:
+
+| | where | notes |
+| --- | --- | --- |
+| 1 | `2PY2` | An environment variable holding a Python path. "2PY2" means a *second* Python, **not** Python 2. |
+| 2 | `D3TA1L3R_PYTHON` | The same idea under a name any shell can `export`. |
+| 3 | `python.env` | A file beside the wrapper. Optional; copy `python.env.example`. |
+| 4 | `.venv/bin/d3ta1l3r` | The virtualenv the install instructions build. |
+| 5 | `d3ta1l3r` on `PATH` | |
+| 6 | `python3` / `python` | Any interpreter that can import the package. |
+
+`python.env` accepts `PYTHON=/path/to/python` (or `PYTHON_PATH`, `PYTHON_EXE`,
+`PYTHON_BIN`, `PYTHON_HOME`, `2PY2`), or just a bare path on its own line.
+Comments, blank lines, quotes and CRLF endings are all tolerated. It is
+machine-local, so the real file is gitignored and only `python.env.example` is
+committed.
+
+**One shell quirk worth knowing.** `2PY2` starts with a digit, which makes it an
+invalid identifier in bash and zsh: `${2PY2}` is a *bad substitution*, a bare
+`$2PY2` silently expands to positional parameter 2 followed by the text `PY2`,
+and even `export 2PY2=...` is rejected. Set it with something that does not
+parse it as an assignment:
+
+```bash
+env 2PY2=/opt/portable-python/python ./updater.sh --check   # works
+export 2PY2=...                                            # bash: not a valid identifier
+```
+
+`D3TA1L3R_PYTHON` exists for exactly this reason — same effect, exportable the
+normal way. The scripts read both with `printenv`, which has no identifier
+rules. On Windows, `set 2PY2=C:\portable\python.exe` works as expected.
+
+A configured interpreter is checked before being trusted: if it cannot
+`import d3ta1l3r` the wrapper says so and keeps looking, rather than dying on a
+path that has moved.
+
 An updater in a security tool is a supply-chain decision rather than a
 convenience, so this one is deliberately reluctant:
 
