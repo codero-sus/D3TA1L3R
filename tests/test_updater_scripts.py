@@ -268,6 +268,47 @@ class TestPythonResolution:
         assert "-m d3ta1l3r update --check --yes --json" in stub_repo.invoked()
 
 
+PREVIEW = ROOT / "scripts" / "preview.sh"
+
+
+class TestPreviewScript:
+    """A dev convenience: one command to get a dashboard with data in it."""
+
+    def test_it_exists_and_is_executable(self) -> None:
+        assert PREVIEW.is_file()
+        assert PREVIEW.stat().st_mode & stat.S_IXUSR
+
+    def test_it_is_valid_bash(self) -> None:
+        if shutil.which("bash") is None:  # pragma: no cover
+            pytest.skip("bash is not installed")
+        done = subprocess.run(
+            ["bash", "-n", str(PREVIEW)], capture_output=True, text=True, check=False
+        )
+        assert done.returncode == 0, done.stderr
+
+    @pytest.mark.parametrize("term", ["curl ", "wget ", "Invoke-Expression", "| sh", "| bash"])
+    def test_it_does_not_fetch_or_pipe_remote_code(self, term: str) -> None:
+        assert term.lower() not in code_of(PREVIEW)
+
+    def test_it_never_touches_the_real_vault(self) -> None:
+        """A preview that wrote to ~/.d3ta1l3r would not be a preview."""
+        body = code_of(PREVIEW)
+        assert "default_vault_path" not in body
+        assert "~/.d3ta1l3r" not in body
+        assert "/tmp/d3t-preview" in body, "it must use a throwaway directory"
+
+    def test_it_reuses_what_it_already_has(self) -> None:
+        """Re-running should not rebuild the venv or reseed the vault."""
+        body = code_of(PREVIEW)
+        assert 'if [ ! -x "$root/.venv/bin/d3ta1l3r" ]' in body
+        assert 'if [ ! -f "$dir/watchlist.vault" ]' in body
+
+    def test_the_port_and_passphrase_are_overridable(self) -> None:
+        body = code_of(PREVIEW)
+        assert "${port:-7248}" in body, "code_of() lowercases, so match that"
+        assert "${passphrase:-" in body
+
+
 class TestShellScriptRuns:
     def test_it_is_valid_bash(self) -> None:
         if shutil.which("bash") is None:  # pragma: no cover - always true on CI
