@@ -364,3 +364,47 @@ class TestExamples:
         assert proc.returncode == 0, proc.stderr
         assert "demo mode" in proc.stdout
         assert "finding(s)" in proc.stdout
+
+
+class TestNoSessionDetailsLeak:
+    """Sample output pasted from a real run must not ship that run's details.
+
+    ``d3ta1l3r update`` prints your branch and the absolute path of your
+    checkout, and pasting a real session into the README is an easy mistake.
+    Those strings are somebody's working branch and somebody's home directory,
+    not documentation — and a working branch name can be private.
+
+    The patterns are assembled from pieces so this file, which is itself
+    scanned, does not trip its own assertions.
+    """
+
+    _BRANCH = re.compile("arena" + "/" + r"[0-9a-f]{8}-")
+    _HOME = re.compile("/" + "home/" + r"[A-Za-z0-9_-]+/")
+    _SKIP = frozenset({".git", ".venv", "__pycache__", ".pytest_cache", ".mypy_cache", "node_modules"})
+    _SUFFIXES = frozenset({".py", ".md", ".sh", ".toml", ".json", ".html", ".css", ".js", ".yml", ".yaml"})
+
+    def _shipped_files(self) -> list[Path]:
+        files = []
+        for path in ROOT.rglob("*"):
+            if not path.is_file() or path.suffix not in self._SUFFIXES:
+                continue
+            if any(part in self._SKIP for part in path.parts):
+                continue
+            files.append(path)
+        return files
+
+    def test_no_working_branch_names_are_committed(self) -> None:
+        for path in self._shipped_files():
+            text = path.read_text(encoding="utf-8", errors="ignore")
+            assert not self._BRANCH.search(text), (
+                f"{path.relative_to(ROOT)} names a working branch; use `main` in "
+                "sample output — branch names can be private"
+            )
+
+    def test_no_absolute_home_paths_are_committed(self) -> None:
+        for path in self._shipped_files():
+            text = path.read_text(encoding="utf-8", errors="ignore")
+            assert not self._HOME.search(text), (
+                f"{path.relative_to(ROOT)} contains an absolute home path; "
+                "use `~/` in sample output"
+            )
