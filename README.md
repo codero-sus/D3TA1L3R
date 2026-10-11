@@ -2,6 +2,10 @@
 
 **Automated self-audit of your own public digital footprint.**
 
+Made with ❤️ by [**codero-sus**](https://github.com/codero-sus) ·
+[GitHub](https://github.com/codero-sus) ·
+[Website](https://the-codero.web.app/)
+
 D3TA1L3R takes identifiers *you* own — a handle, an email address, your name, a
 domain — and checks them against **81 public sources** (68 enabled by default): curated profile pages
 matched by signature, and public unauthenticated JSON APIs that return
@@ -632,6 +636,30 @@ fixtures, so it also works in a sandbox with no egress. Tests are expected to
 pin the tool's *claims*, not just its code paths: signature semantics, the
 "unknown ≠ absent" rule, escaping of hostile content in reports, the SSRF guard,
 and the exit codes CI depends on.
+
+## Author and credits
+
+**D3TA1L3R is by [codero-sus](https://github.com/codero-sus).** All credits go
+to codero-sus — the design, the source signatures, the confidence model, the
+vault, the local-model work and this documentation.
+
+| | |
+| --- | --- |
+| Author | [codero-sus](https://github.com/codero-sus) |
+| Website | [https://the-codero.web.app/](https://the-codero.web.app/) |
+| Source | [github.com/codero-sus/D3TA1L3R](https://github.com/codero-sus/D3TA1L3R) |
+| Issues | [github.com/codero-sus/D3TA1L3R/issues](https://github.com/codero-sus/D3TA1L3R/issues) |
+
+Made with ❤️ by codero-sus.
+
+The dashboard carries the same credit in its footer, on every page, linking to
+the GitHub profile and the website above.
+
+Third-party thanks, none of which are bundled or fetched at runtime: the
+**HIBP** k-anonymity range API for password checks, **Gravatar**, **GitHub**,
+**GitLab** and the other public endpoints listed by `d3ta1l3r sources` (all
+queried unauthenticated and without keys), and **Hugging Face** as a *file host*
+for model weights you choose to download — never as an inference endpoint.
 
 ## Legal and ethical use
 

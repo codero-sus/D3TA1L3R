@@ -150,3 +150,308 @@ footer {
 #vault-check-result { margin-top: .7rem; }
 #vault-check-result p { margin: .25rem 0; font-size: .9rem; }
 #vault-check-result .fineprint { border-left: 3px solid var(--bad); padding-left: .6rem; }
+
+/* ---------------------------------------------------------------------------
+   Motion, polish and effects.
+
+   Everything here is decoration: the page is fully usable with all of it
+   switched off. Anyone who has asked their system to reduce motion gets
+   essentially none of it -- see the media query at the end of this block.
+   --------------------------------------------------------------------------- */
+:root {
+  --ease: cubic-bezier(.22, .68, .36, 1);
+  --ease-out-back: cubic-bezier(.34, 1.4, .64, 1);
+  --fast: .16s;
+  --med: .28s;
+  --slow: .5s;
+  --glow: 0 0 0 1px rgba(94, 234, 212, .22), 0 10px 30px -12px rgba(94, 234, 212, .3);
+  --lift: 0 14px 34px -18px rgba(0, 0, 0, .75);
+  --shadow-1: 0 1px 2px rgba(0, 0, 0, .4);
+}
+
+@keyframes d3t-fade-up {
+  from { opacity: 0; transform: translate3d(0, 10px, 0); }
+  to { opacity: 1; transform: none; }
+}
+@keyframes d3t-fade-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+@keyframes d3t-pop {
+  0% { opacity: 0; transform: scale(.97); }
+  100% { opacity: 1; transform: none; }
+}
+@keyframes d3t-heartbeat {
+  0%, 100% { transform: scale(1); }
+  14% { transform: scale(1.22); }
+  28% { transform: scale(1); }
+  42% { transform: scale(1.14); }
+}
+@keyframes d3t-shimmer {
+  from { background-position: -180% 0; }
+  to { background-position: 180% 0; }
+}
+@keyframes d3t-pulse-ring {
+  0% { box-shadow: 0 0 0 0 rgba(94, 234, 212, .45); }
+  70% { box-shadow: 0 0 0 9px rgba(94, 234, 212, 0); }
+  100% { box-shadow: 0 0 0 0 rgba(94, 234, 212, 0); }
+}
+@keyframes d3t-spin { to { transform: rotate(360deg); } }
+@keyframes d3t-sweep {
+  from { transform: translateX(-120%); }
+  to { transform: translateX(320%); }
+}
+@keyframes d3t-rise {
+  from { height: 0; opacity: 0; }
+  to { height: var(--h, auto); opacity: 1; }
+}
+
+/* --- structure ---------------------------------------------------------- */
+html { scroll-behavior: smooth; }
+html { scrollbar-color: #2b3242 var(--bg); }
+::-webkit-scrollbar { width: 11px; height: 11px; }
+::-webkit-scrollbar-track { background: var(--bg); }
+::-webkit-scrollbar-thumb {
+  background: #2b3242; border-radius: 99px; border: 3px solid var(--bg);
+}
+::-webkit-scrollbar-thumb:hover { background: #3a4356; }
+
+::selection { background: rgba(94, 234, 212, .28); color: #fff; }
+
+/* Panels lift on hover; the whole card is the affordance, not just a link. */
+.panel, .card, .stat {
+  transition: transform var(--med) var(--ease),
+              border-color var(--med) var(--ease),
+              box-shadow var(--med) var(--ease),
+              background-color var(--med) var(--ease);
+}
+.panel:hover, .card:hover, .stat:hover {
+  transform: translateY(-2px);
+  border-color: #2f3747;
+  box-shadow: var(--lift);
+}
+.card { position: relative; overflow: hidden; }
+.card::after {
+  content: ""; position: absolute; inset: 0; pointer-events: none;
+  background: linear-gradient(115deg, transparent 40%, rgba(255, 255, 255, .045) 50%, transparent 60%);
+  opacity: 0; transition: opacity var(--slow) var(--ease);
+}
+.card:hover::after { opacity: 1; }
+
+/* Panels and cards arrive once, staggered, rather than all at once. */
+main > *, .grid > *, .stats > * { animation: d3t-fade-up var(--slow) var(--ease) both; }
+.grid > *:nth-child(2), .stats > .stat:nth-child(2) { animation-delay: .05s; }
+.grid > *:nth-child(3), .stats > .stat:nth-child(3) { animation-delay: .1s; }
+.grid > *:nth-child(4), .stats > .stat:nth-child(4) { animation-delay: .15s; }
+.stats > .stat:nth-child(5) { animation-delay: .2s; }
+.stats > .stat:nth-child(6) { animation-delay: .25s; }
+
+/* --- header ------------------------------------------------------------- */
+.topbar { transition: box-shadow var(--med) var(--ease), background-color var(--med) var(--ease); }
+.topbar.is-scrolled {
+  box-shadow: 0 10px 26px -18px rgba(0, 0, 0, .9);
+  background: rgba(12, 14, 19, .95);
+}
+.brand { transition: transform var(--med) var(--ease-out-back); }
+.brand:hover { transform: translateY(-1px); }
+.brand-mark {
+  position: relative; overflow: hidden;
+  transition: box-shadow var(--med) var(--ease), transform var(--med) var(--ease-out-back);
+}
+.brand:hover .brand-mark { transform: rotate(-6deg) scale(1.06); box-shadow: var(--glow); }
+/* a light sweep across the logo on hover */
+.brand-mark::after {
+  content: ""; position: absolute; top: 0; bottom: 0; width: 40%;
+  background: linear-gradient(90deg, transparent, rgba(255, 255, 255, .55), transparent);
+  transform: translateX(-160%); transition: transform var(--slow) var(--ease);
+}
+.brand:hover .brand-mark::after { transform: translateX(320%); }
+
+.topbar nav a {
+  position: relative; padding: .2rem .1rem;
+  transition: color var(--fast) var(--ease);
+}
+.topbar nav a::after {
+  content: ""; position: absolute; left: 0; right: 0; bottom: -2px; height: 2px;
+  background: var(--accent); border-radius: 2px;
+  transform: scaleX(0); transform-origin: left;
+  transition: transform var(--med) var(--ease);
+}
+.topbar nav a:hover { text-decoration: none; color: #fff; }
+.topbar nav a:hover::after { transform: scaleX(1); }
+.version { transition: color var(--fast) var(--ease); }
+
+/* --- buttons ------------------------------------------------------------ */
+button, .button {
+  transition: transform var(--fast) var(--ease), filter var(--fast) var(--ease),
+              box-shadow var(--med) var(--ease), background-color var(--med) var(--ease),
+              border-color var(--med) var(--ease), opacity var(--med) var(--ease);
+}
+button:hover:not([disabled]), .button:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 8px 20px -10px rgba(94, 234, 212, .65);
+}
+button:active:not([disabled]), .button:active { transform: translateY(0) scale(.985); }
+button[disabled] { box-shadow: none; transform: none; }
+button.danger:hover, .button.danger:hover {
+  box-shadow: 0 8px 20px -10px rgba(251, 113, 133, .6);
+}
+button.link:hover { text-decoration: underline; }
+/* keyboard users get a ring that does not depend on hover */
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+  border-radius: 8px;
+}
+
+/* --- inputs ------------------------------------------------------------- */
+input[type=text], input[type=email], input[type=number], input[type=password], select {
+  transition: border-color var(--fast) var(--ease), box-shadow var(--med) var(--ease),
+              background-color var(--fast) var(--ease);
+}
+input:hover, select:hover { border-color: #313a4b; }
+input:focus, select:focus { box-shadow: 0 0 0 3px rgba(94, 234, 212, .14); }
+input::placeholder { color: #5d6675; }
+.check { transition: color var(--fast) var(--ease); }
+.check:hover { color: #fff; }
+.check input[type=checkbox] { accent-color: var(--accent); cursor: pointer; }
+summary { transition: color var(--fast) var(--ease); }
+summary:hover { color: #fff; }
+details[open] > summary { color: #fff; }
+
+/* --- tables ------------------------------------------------------------- */
+tbody tr { transition: background-color var(--fast) var(--ease); }
+tbody tr:hover { background: rgba(255, 255, 255, .028); }
+table { animation: d3t-fade-in var(--slow) var(--ease) both; }
+
+/* --- stats -------------------------------------------------------------- */
+.stat b {
+  background: linear-gradient(180deg, #fff, #b9c3d4);
+  -webkit-background-clip: text; background-clip: text; color: transparent;
+}
+.stat:hover b { background: linear-gradient(180deg, #fff, var(--accent));
+  -webkit-background-clip: text; background-clip: text; }
+
+/* --- badges, progress, live state --------------------------------------- */
+.badge { transition: transform var(--med) var(--ease-out-back), box-shadow var(--med) var(--ease); }
+.badge:hover { transform: scale(1.06); }
+.badge.live, .badge.running { animation: d3t-pulse-ring 1.9s var(--ease) infinite; }
+
+.progressbar { position: relative; overflow: hidden; box-shadow: inset 0 1px 2px rgba(0, 0, 0, .5); }
+.progressbar > span { transition: width .45s var(--ease); position: relative; }
+.progressbar > span::after {
+  content: ""; position: absolute; inset: 0;
+  background: linear-gradient(90deg, transparent, rgba(255, 255, 255, .38), transparent);
+  animation: d3t-sweep 1.6s linear infinite;
+}
+.progressbar.indeterminate > span {
+  width: 35% !important;
+  animation: d3t-shimmer 1.2s linear infinite;
+}
+
+.dot {
+  display: inline-block; width: 7px; height: 7px; border-radius: 50%;
+  background: currentColor; margin-right: .4rem; vertical-align: middle;
+}
+.dot.live { animation: d3t-pulse-ring 1.8s var(--ease) infinite; }
+.spinner {
+  display: inline-block; width: 13px; height: 13px; border-radius: 50%;
+  border: 2px solid rgba(255, 255, 255, .2); border-top-color: var(--accent);
+  animation: d3t-spin .8s linear infinite; vertical-align: -2px;
+}
+
+/* --- banners ------------------------------------------------------------ */
+.banner { animation: d3t-fade-up var(--slow) var(--ease) both; }
+.banner.warn { box-shadow: inset 0 0 0 1px rgba(251, 191, 36, .12); }
+
+/* --- log stream --------------------------------------------------------- */
+.log { scroll-behavior: smooth; animation: d3t-fade-in var(--med) var(--ease) both; }
+.log::-webkit-scrollbar-thumb { background: #263041; }
+
+/* --- footer credits ----------------------------------------------------- */
+.credits {
+  margin-top: 1.1rem; padding-top: 1rem; border-top: 1px dashed var(--line);
+  display: flex; flex-direction: column; gap: .5rem; animation: d3t-fade-up var(--slow) var(--ease) both;
+}
+.made-with { margin: 0; font-size: .92rem; color: var(--ink); }
+.made-with a { font-weight: 650; }
+.heart {
+  display: inline-block; min-width: 1em;
+  animation: d3t-heartbeat 2.4s var(--ease) infinite;
+  transform-origin: center;
+}
+.credit-links { display: flex; flex-wrap: wrap; gap: 1rem; margin: 0; font-size: .84rem; }
+.credit-links a {
+  display: inline-flex; align-items: center; gap: .35rem;
+  padding: .25rem .6rem; border-radius: 999px;
+  border: 1px solid var(--line); background: rgba(255, 255, 255, .02);
+  transition: transform var(--med) var(--ease-out-back), border-color var(--med) var(--ease),
+              background-color var(--med) var(--ease), box-shadow var(--med) var(--ease),
+              color var(--fast) var(--ease);
+}
+.credit-links a:hover {
+  text-decoration: none; transform: translateY(-2px);
+  border-color: rgba(94, 234, 212, .45); background: rgba(94, 234, 212, .07);
+  box-shadow: var(--glow);
+}
+.credit-links a span { color: var(--accent); transition: transform var(--med) var(--ease-out-back); }
+.credit-links a:hover span { transform: scale(1.25) rotate(8deg); }
+.credits .fineprint { margin: 0; }
+
+/* --- reveal on scroll --------------------------------------------------- */
+.reveal { opacity: 0; transform: translate3d(0, 14px, 0); }
+.reveal.is-visible {
+  opacity: 1; transform: none;
+  transition: opacity var(--slow) var(--ease), transform var(--slow) var(--ease);
+}
+
+/* --- toast -------------------------------------------------------------- */
+#toast-host {
+  position: fixed; right: 1rem; bottom: 1rem; z-index: 50;
+  display: flex; flex-direction: column; gap: .5rem; pointer-events: none;
+}
+.toast {
+  pointer-events: auto; max-width: 340px;
+  background: var(--panel); border: 1px solid var(--line); border-left: 3px solid var(--accent);
+  border-radius: 10px; padding: .6rem .85rem; font-size: .86rem;
+  box-shadow: var(--lift);
+  animation: d3t-pop var(--med) var(--ease-out-back) both;
+}
+.toast.bad { border-left-color: var(--bad); }
+.toast.warn { border-left-color: var(--warn); }
+.toast.ok { border-left-color: var(--ok); }
+.toast.leaving { animation: d3t-fade-in var(--med) var(--ease) reverse both; }
+
+/* --- misc polish -------------------------------------------------------- */
+.avatar { transition: transform var(--med) var(--ease-out-back), box-shadow var(--med) var(--ease); }
+.avatar:hover { transform: scale(1.08); box-shadow: var(--glow); }
+a { transition: color var(--fast) var(--ease); }
+a:hover { color: #7ff0dd; }
+code { transition: border-color var(--fast) var(--ease); }
+.panel h2 { position: relative; }
+.status { transition: color var(--med) var(--ease); }
+.skeleton {
+  background: linear-gradient(90deg, #171b23 25%, #1f2531 37%, #171b23 63%);
+  background-size: 300% 100%; border-radius: 8px;
+  animation: d3t-shimmer 1.4s linear infinite;
+}
+
+/* ---------------------------------------------------------------------------
+   Respect the system preference. Motion can cause real discomfort, and none
+   of the above carries information the user would otherwise miss.
+   --------------------------------------------------------------------------- */
+@media (prefers-reduced-motion: reduce) {
+  html { scroll-behavior: auto; }
+  *, *::before, *::after {
+    animation-duration: .001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: .001ms !important;
+    scroll-behavior: auto !important;
+  }
+  .reveal { opacity: 1; transform: none; }
+}
+
+/* `data-reveal` elements are animated by the observer in app.js instead of the
+   blanket entrance above. The .reveal class is added by JS, so if scripting is
+   unavailable the element simply renders normally rather than staying hidden. */
+[data-reveal].reveal { animation: none; }
