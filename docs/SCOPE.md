@@ -122,6 +122,14 @@ personal data could travel, so the rules are explicit:
   Cortex is not an exception to that rule: it is a server you run, and its
   `CORTEX_API_KEY` unlocks your own box, not an account with a vendor.
 
+- **The breadth modes recommend the same two backends, and only those two.**
+  From mode `4` upward — the point where a scan first reaches outside the
+  curated core — `d3ta1l3r modes`, `d3ta1l3r scan --mode N` and the dashboard
+  all suggest handing ambiguous hits to Cortex LLMHoster or Ollama. The advice
+  lives in `d3ta1l3r/modes.py` and names **only** local backends; a test asserts
+  that no commercial provider is named anywhere in that module, so the
+  suggestion cannot slowly turn into a recommendation to upload your results.
+
 - **You do not have to guess the model's name.** `--ollama-model` and
   `--cortex-model` default to `auto`: the server is asked what it has, and the
   first model that can hold a conversation is used (embedding-only models are

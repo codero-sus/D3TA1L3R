@@ -37,6 +37,7 @@ class TestReadme:
         commands = set(subparsers[-1].choices)
         assert commands == {
             "scan",
+            "modes",
             "sources",
             "calibrate",
             "diff",

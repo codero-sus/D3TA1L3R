@@ -79,6 +79,15 @@ class SiteSpec:
     enabled_by_default: bool = True
     verified_on: str | None = None
     weight: int = 200
+    tier: int = 1
+    """Breadth tier, 1..15: a scan at ``--mode N`` probes every source whose
+    tier is ``<= N``.
+
+    Tiers 1-3 are the hand-curated, higher-confidence core. Tiers 4-15 are the
+    unverified bulk catalogue, ordered by how noisy their detection method is,
+    so raising the mode buys coverage by paying in false positives. See
+    :mod:`d3ta1l3r.modes`.
+    """
 
     def __post_init__(self) -> None:
         placeholder = "{" + self.kind.value + "}"
@@ -104,6 +113,8 @@ class SiteSpec:
             )
         if not self.name.strip() or not self.category.strip():
             raise ConfigError(f"site spec {self.id!r}: name and category are required")
+        if not 1 <= self.tier <= 15:
+            raise ConfigError(f"site spec {self.id!r}: tier must be 1..15, got {self.tier}")
         if urlsplit(self.url).scheme not in ("http", "https"):
             raise ConfigError(f"site spec {self.id!r}: url must be absolute http(s)")
 
@@ -146,6 +157,7 @@ class UsernameProbeSource(BaseSource):
             enabled_by_default=spec.enabled_by_default,
             weight=spec.weight,
             notes=spec.notes,
+            tier=spec.tier,
         )
 
     def query_url(self, identifier: str) -> str:

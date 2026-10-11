@@ -455,3 +455,124 @@ code { transition: border-color var(--fast) var(--ease); }
    blanket entrance above. The .reveal class is added by JS, so if scripting is
    unavailable the element simply renders normally rather than staying hidden. */
 [data-reveal].reveal { animation: none; }
+
+/* ---------------------------------------------------------------------------
+   Breadth mode picker — the dial that trades coverage for false positives.
+   The caveat is part of the control, not a tooltip: a mode that can cry wolf
+   says so while you are choosing it.
+   --------------------------------------------------------------------------- */
+
+.mode-picker {
+  margin: 0 0 1.1rem;
+  padding: 0.9rem 1rem 1rem;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: color-mix(in srgb, var(--panel) 92%, transparent);
+}
+
+.mode-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.75rem;
+  margin-bottom: 0.55rem;
+}
+
+.mode-head label {
+  font-weight: 600;
+  font-size: 0.94rem;
+}
+
+.mode-head output {
+  font-variant-numeric: tabular-nums;
+  font-weight: 700;
+  font-size: 1.05rem;
+  padding: 0.05rem 0.5rem;
+  border-radius: 999px;
+  color: var(--ink);
+  background: color-mix(in srgb, var(--accent) 18%, transparent);
+  border: 1px solid color-mix(in srgb, var(--accent) 45%, transparent);
+  transition: background var(--fast) var(--ease), transform var(--fast) var(--ease-out-back);
+}
+
+.mode-picker input[type="range"] {
+  width: 100%;
+  margin: 0;
+  accent-color: var(--accent);
+  cursor: pointer;
+}
+
+.mode-picker input[type="range"].is-noisy {
+  accent-color: var(--warn);
+}
+
+.mode-scale {
+  display: flex;
+  justify-content: space-between;
+  gap: 0.5rem;
+  margin-top: 0.3rem;
+  font-size: 0.74rem;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.mode-scale #mode-count {
+  font-variant-numeric: tabular-nums;
+  text-transform: none;
+  letter-spacing: 0;
+  color: var(--ink);
+  font-weight: 600;
+}
+
+.mode-caveat {
+  margin: 0.7rem 0 0;
+  font-size: 0.86rem;
+  line-height: 1.5;
+  color: var(--muted);
+  border-left: 2px solid color-mix(in srgb, var(--accent) 55%, transparent);
+  padding-left: 0.7rem;
+}
+
+.mode-advice {
+  margin: 0.6rem 0 0;
+  font-size: 0.86rem;
+  line-height: 1.5;
+  font-weight: 600;
+  color: var(--ink);
+  padding: 0.55rem 0.7rem;
+  border-radius: var(--radius);
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+  border: 1px solid color-mix(in srgb, var(--accent) 38%, transparent);
+  animation: d3t-fade-in var(--med) var(--ease) both;
+}
+
+.mode-llm {
+  margin: 0.55rem 0 0;
+  padding-left: 1.1rem;
+  font-size: 0.84rem;
+  color: var(--muted);
+}
+
+.mode-llm li {
+  margin: 0.15rem 0;
+}
+
+.mode-llm .hint {
+  opacity: 0.85;
+}
+
+/* Breadth-mode table on the coverage page */
+
+.coverage tr.is-default {
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+  box-shadow: inset 2px 0 0 var(--accent);
+}
+
+.coverage tr.is-default td {
+  font-weight: 600;
+}
+
+.coverage tr {
+  transition: background var(--fast) var(--ease);
+}

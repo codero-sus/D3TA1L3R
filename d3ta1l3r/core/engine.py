@@ -85,7 +85,9 @@ class ScanEngine:
         selected = [
             source
             for source in self.available_sources()
-            if self.config.source_enabled(source.id, source.kind.value, source.category)
+            if self.config.source_enabled(
+                source.id, source.kind.value, source.category, source.meta.tier
+            )
             and (source.enabled_by_default or self.config.enabled_sources)
         ]
         selected.sort(key=lambda s: (s.meta.weight, s.id))
@@ -105,6 +107,7 @@ class ScanEngine:
                 "docs_url": source.meta.docs_url,
                 "enabled_by_default": source.enabled_by_default,
                 "weight": source.meta.weight,
+                "tier": source.meta.tier,
                 "notes": source.meta.notes,
             }
             for source in sorted(self.available_sources(), key=lambda s: (s.meta.weight, s.id))

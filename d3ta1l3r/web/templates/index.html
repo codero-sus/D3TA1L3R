@@ -36,6 +36,43 @@
         </label>
       </div>
 
+      <div class="mode-picker">
+        <div class="mode-head">
+          <label for="mode-range">Breadth mode</label>
+          <output id="mode-out" for="mode-range">{{ default_mode }}</output>
+        </div>
+        <input type="range" id="mode-range" name="mode" min="1" max="15" step="1"
+               value="{{ default_mode }}" list="mode-ticks" aria-describedby="mode-caveat">
+        <datalist id="mode-ticks">
+          <option value="1"></option><option value="3"></option><option value="7"></option>
+          <option value="11"></option><option value="15"></option>
+        </datalist>
+        <div class="mode-scale">
+          <span>narrow · quiet</span>
+          <span id="mode-count"></span>
+          <span>broad · noisy</span>
+        </div>
+        <p class="mode-caveat" id="mode-caveat"></p>
+        <p class="mode-advice" id="mode-advice" hidden></p>
+        <ul class="mode-llm" id="mode-llm" hidden>
+          {% for llm in llm_backends %}
+            <li>
+              <a href="{{ llm.url }}" target="_blank" rel="noopener noreferrer">{{ llm.name }}</a>
+              <span class="hint">— {{ llm.hint }}</span>
+            </li>
+          {% endfor %}
+        </ul>
+      </div>
+
+      {# canonical text for every mode, read by JS — never paraphrased on the page #}
+      <div id="mode-notes" hidden>
+        {% for m in modes %}
+          <span data-mode-note="{{ m.mode }}">{{ m.caveat }}</span>
+          <span data-mode-advice="{{ m.mode }}">{{ mode_advice[m.mode] or '' }}</span>
+          <span data-mode-count="{{ m.mode }}">{{ m.sources }} sites</span>
+        {% endfor %}
+      </div>
+
       <details>
         <summary>Advanced options</summary>
         <div class="fields">

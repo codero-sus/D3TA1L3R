@@ -51,6 +51,13 @@ class SourceMeta:
     enabled_by_default: bool = True
     weight: int = 100
     """Lower runs first — cheap, high-signal APIs ahead of slow HTML probes."""
+
+    tier: int = 1
+    """Breadth tier, 1..15. A scan at mode ``N`` uses sources with ``tier <= N``.
+
+    Sources that are not site-spec probes are the curated, key-free APIs; they
+    sit at tier 1, so even the narrowest mode keeps them.
+    """
     notes: str = ""
     """Set when a source is disabled (or surprising): why, and what to do instead."""
 
