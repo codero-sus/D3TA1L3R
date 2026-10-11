@@ -36,6 +36,8 @@
     const categories = list("categories");
     if (categories.length) payload.categories = categories;
 
+    const mode = parseInt(data.get("mode"), 10);
+    if (!Number.isNaN(mode)) payload.mode = mode;
     const maxSites = parseInt(data.get("max_sites"), 10);
     if (!Number.isNaN(maxSites)) payload.max_sites = maxSites;
     const concurrency = parseInt(data.get("concurrency"), 10);
@@ -864,6 +866,43 @@
     wireReveal();
   }
 
+  /**
+   * The breadth dial. Moving it rewrites the caveat and, from mode 4 up, the
+   * local-model advice — both read from server-rendered text so the page can
+   * never paraphrase a promise the code does not keep.
+   */
+  function wireModePicker() {
+    const range = $("#mode-range");
+    if (!range) return;
+    const out = $("#mode-out");
+    const count = $("#mode-count");
+    const caveat = $("#mode-caveat");
+    const advice = $("#mode-advice");
+    const llm = $("#mode-llm");
+
+    const note = (attr, mode) => {
+      const node = document.querySelector(`[data-${attr}="${mode}"]`);
+      return node ? node.textContent.trim() : "";
+    };
+
+    const render = () => {
+      const mode = String(range.value);
+      if (out) out.textContent = mode;
+      if (count) count.textContent = note("mode-count", mode);
+      if (caveat) caveat.textContent = note("mode-note", mode);
+      const text = note("mode-advice", mode);
+      if (advice) {
+        advice.textContent = text;
+        advice.hidden = !text;
+      }
+      if (llm) llm.hidden = !text;
+      range.classList.toggle("is-noisy", Number(mode) >= 12);
+    };
+
+    range.addEventListener("input", render);
+    render();
+  }
+
   function boot() {
     const form = $("#scan-form");
     if (form) form.addEventListener("submit", startScan);
@@ -875,6 +914,7 @@
     wireVerify();
     wireModels();
     wireChrome();
+    wireModePicker();
   }
 
   window.D3TA1L3R = {
@@ -889,6 +929,7 @@
     pullModel: pullModel,
     toast: toast,
     wireChrome: wireChrome,
+    wireModePicker: wireModePicker,
   };
   if (document.readyState === "loading") {
     document.addEventListener("DOMContentLoaded", boot);

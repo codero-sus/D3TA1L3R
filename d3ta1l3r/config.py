@@ -15,6 +15,7 @@ from typing import Any, ClassVar
 
 from .core.browser import BrowserProfile, resolve_profile
 from .errors import ConfigError
+from .modes import DEFAULT_MODE, MAX_MODE, MIN_MODE
 
 __all__ = ["DEFAULT_USER_AGENT", "RateLimitConfig", "ScanConfig"]
 
@@ -128,6 +129,15 @@ class ScanConfig:
     use_cache: bool = False
 
     # -- source selection ------------------------------------------------
+    mode: int = DEFAULT_MODE
+    """Breadth mode, 1..15. A scan at mode ``N`` probes every source whose tier
+    is ``<= N``: low modes are narrow and quiet, high modes are broad and noisy.
+
+    The default is :data:`~d3ta1l3r.modes.DEFAULT_MODE`, which covers exactly the
+    curated core — so the default scan is unchanged from before modes existed,
+    and breadth is something you opt into. See :mod:`d3ta1l3r.modes`.
+    """
+
     enabled_sources: frozenset[str] = frozenset()
     disabled_sources: frozenset[str] = frozenset()
     categories: frozenset[str] = frozenset()
@@ -161,6 +171,8 @@ class ScanConfig:
             raise ConfigError("contact_email must look like an address")
         if self.max_sites is not None and self.max_sites < 1:
             raise ConfigError("max_sites must be >= 1 when set")
+        if not MIN_MODE <= self.mode <= MAX_MODE:
+            raise ConfigError(f"mode must be {MIN_MODE}..{MAX_MODE}, got {self.mode}")
         if self.cache_ttl < 0:
             raise ConfigError("cache_ttl must be >= 0")
         bad_kinds = self.kinds - self.SUPPORTED_KINDS
@@ -184,8 +196,12 @@ class ScanConfig:
         """Return a copy with overrides applied and re-validated."""
         return replace(self, **changes)
 
-    def source_enabled(self, source_id: str, kind: str, category: str = "") -> bool:
-        """Apply the enable/disable/category/kind filters for one source."""
+    def source_enabled(
+        self, source_id: str, kind: str, category: str = "", tier: int = 1
+    ) -> bool:
+        """Apply the mode, enable/disable, category and kind filters for one source."""
+        if tier > self.mode:
+            return False
         if self.enabled_sources:
             return source_id in self.enabled_sources
         if source_id in self.disabled_sources:

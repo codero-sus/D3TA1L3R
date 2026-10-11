@@ -85,6 +85,99 @@ Prefer `marker`/`absence`, or move the site to a real API.
 | `enabled_by_default` | no (`true`) | `false` for sites that fight automation |
 | `verified_on` | no | date you last confirmed the signature by hand |
 | `weight` | no (`200`) | lower runs first |
+| `tier` | no (`1`) | breadth tier `1..15`; a scan at mode `N` uses `tier <= N` |
+
+## Breadth modes
+
+Every source carries a **tier** from 1 to 15, and a scan at mode `N` probes
+every source whose tier is `<= N`. The mode is the dial for the one trade-off
+that cannot be engineered away: **coverage costs false positives**.
+
+```bash
+d3ta1l3r scan -u your_handle --mode 1      # narrow, quiet
+d3ta1l3r scan -u your_handle --mode 15     # everything, noisy
+d3ta1l3r modes                             # the table below
+```
+
+| Mode | Sources | What it adds |
+| --- | --- | --- |
+| 1 | 19 | narrowest — curated, high-signal sources only |
+| 2 | 38 | curated core — every hand-reviewed source |
+| 3 | 57 | curated core — every hand-reviewed source |
+| 4 | 131 | first step outside the curated core; unverified sources begin here |
+| 5 | 205 | broad — a large slice of the unverified catalogue |
+| 6 | 279 | broad — a large slice of the unverified catalogue |
+| 7 | 352 | broad — a large slice of the unverified catalogue |
+| 8 | 426 | broad — a large slice of the unverified catalogue |
+| 9 | 500 | very broad — noisy detectors and weak signatures included |
+| 10 | 574 | very broad — noisy detectors and weak signatures included |
+| 11 | 647 | very broad — noisy detectors and weak signatures included |
+| 12 | 721 | very broad — noisy detectors and weak signatures included |
+| 13 | 795 | nearly everything — status-only probes included |
+| 14 | 869 | nearly everything — status-only probes included |
+| 15 | 942 | everything — maximum reach, expect false positives |
+
+**966 sources, 68 enabled by default** at the default mode 3 — the other 885
+are catalogue entries that unlock as you raise the mode.
+
+*Counts are site probes; the 24 API sources run at every mode.*
+
+### What the tiers mean
+
+| Tiers | What lives there |
+| --- | --- |
+| **1-3** | The curated core: written and reviewed by hand for this project. |
+| **4-7** | Catalogue entries with a **found-marker**: the probe requires positive evidence, and says `error` rather than guessing when it cannot see it. |
+| **8-11** | Catalogue entries leaning on not-found phrases and plain status codes. |
+| **12-15** | Status-code-only probes, sites behind bot protection, and adult sites. The noisiest sources in the catalogue. |
+
+Within each band, sources are ordered by a documented **noise score** — detector
+reliability, how strong the confidence claim is, whether the site needs a
+non-profile probe URL, whether it sits behind bot protection, whether it is an
+adult site, whether its not-found phrase is too short to be distinctive. Raising
+the mode therefore adds the *least* noisy sources first: mode 4 is not a random
+slice of the catalogue, it is the catalogue's best-behaved entries.
+
+### The honesty caveat
+
+Everything from tier 4 up is **unverified**. Its URL templates and not-found
+phrases were bulk-converted from public, community-maintained datasets, not
+produced by this project probing the sites. They are believed correct, not known
+correct, and the confidence claims are set accordingly: a status-code-only probe
+claims `low` and nothing better.
+
+Run `d3ta1l3r calibrate --sites <id>` to measure any single entry.
+
+## Categories
+
+`--categories` filters on these, and the dashboard groups by them:
+
+| Category | Meaning |
+| --- | --- |
+| `developer` | code hosting, package registries, judging sites |
+| `social` | general-purpose social networks and profile pages |
+| `media` | video, streaming, image hosts |
+| `music` | music platforms, charts, listening history |
+| `gaming` | games, ladders, leaderboards |
+| `design` | portfolios, art, photography |
+| `writing` | blogs, newsletters, wikis, long-form |
+| `community` | forums, boards, discussion and ratings sites |
+| `identity` | real-world identifiers (ORCID, OpenStreetMap) |
+| `shopping` | marketplaces, storefronts, creator platforms |
+| `business` | company and professional profiles |
+| `finance` | trading, investing, crypto |
+| `learning` | courses, flashcards, study platforms |
+| `lifestyle` | fitness, food, travel, hobbies |
+| `books` | reading trackers and libraries |
+| `research` | academic and citation sources |
+| `filesharing` | torrent indexes and file hosts |
+| `adult` | adult platforms; age walls make these unreliable |
+| `general` | everything that fits nothing else |
+
+`adult` and `filesharing` entries are pushed to the **highest** tiers on
+purpose. An age wall or a CAPTCHA means the site may answer "not found" to
+every request, however good its signature looks on paper, so those sources are
+never offered as part of the low-noise end of the catalogue.
 
 Adding a site is a data change:
 

@@ -7,9 +7,10 @@ Made with ❤️ by [**codero-sus**](https://github.com/codero-sus) ·
 [Website](https://the-codero.web.app/)
 
 D3TA1L3R takes identifiers *you* own — a handle, an email address, your name, a
-domain — and checks them against **81 public sources** (68 enabled by default): curated profile pages
-matched by signature, and public unauthenticated JSON APIs that return
-structured records. It then tells you three things most tools gloss over:
+domain — and checks them against **966 public sources** (68 enabled by default):
+curated profile pages matched by signature, and public unauthenticated JSON APIs
+that return structured records. It then tells you three things most tools gloss
+over:
 
 1. **What it found**, with a confidence label and the exact evidence behind it.
 2. **What it could not check** — sign-in walls, robots.txt refusals, rate limits,
@@ -139,6 +140,38 @@ They contain personal data — the directory is gitignored on purpose, and
 ```
 
 ## What gets checked
+
+## Breadth modes: coverage costs false positives
+
+`--mode N` (1-15) picks how much of the catalogue to probe. Every source carries
+a tier, and mode `N` probes everything at tier `N` or below.
+
+```bash
+d3ta1l3r scan -u your_handle --mode 1     #   19 sites — narrowest, quietest
+d3ta1l3r scan -u your_handle --mode 3     #   57 sites — the curated core (default)
+d3ta1l3r scan -u your_handle --mode 15    #  942 sites — everything, noisiest
+d3ta1l3r modes                            # the whole table
+```
+
+| Mode | Sites | What you are buying |
+| --- | --- | --- |
+| 1 | 19 | Curated, high-signal sources only. |
+| 3 | 57 | The full curated core — the default, and the historical behaviour. |
+| 4-7 | 131-352 | Catalogue entries that require *positive* evidence (a found-marker). |
+| 8-11 | 426-647 | Not-found phrases and plain status codes. |
+| 12-15 | 721-942 | Status-only probes, bot-protected and adult sites. Expect false positives. |
+
+Modes **4 and up** reach outside the curated core, which is where a local model
+starts to earn its keep — D3TA1L3R will suggest handing the results to
+[Cortex LLMHoster](https://github.com/codero-sus/Cortex_LLMHoster) or
+[Ollama](https://ollama.com) so an ambiguous hit can be adjudicated before you
+trust it. **Local only, never a cloud API**: a tool whose job is to find your
+accounts has no business describing them to somebody else's computer.
+
+Everything from tier 4 up is *unverified* — bulk-converted from public
+community-maintained datasets, not produced by probing the sites. See
+[docs/SOURCES.md](docs/SOURCES.md#breadth-modes) for the tier rule and the noise
+score behind it.
 
 `d3ta1l3r sources` prints the full inventory. Highlights:
 

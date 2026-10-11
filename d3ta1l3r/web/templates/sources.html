@@ -18,13 +18,50 @@
   {% if by_category.update({source.category: by_category.get(source.category, []) + [source]}) %}{% endif %}
 {% endfor %}
 
+<section class="panel">
+  <h2>Breadth modes</h2>
+  <p>
+    Every source below carries a <b>tier</b>, and a scan at mode <code>N</code> runs
+    everything at tier <code>N</code> or below. Raising the mode buys coverage by paying in
+    false positives — the noisy sources are added last, never first.
+  </p>
+  <table class="coverage">
+    <thead><tr><th>Mode</th><th>Sources</th><th>What it adds</th></tr></thead>
+    <tbody>
+      {% for m in modes %}
+      <tr{% if m.mode == default_mode %} class="is-default"{% endif %}>
+        <td>
+          {{ m.mode }}
+          {% if m.mode == default_mode %}<span class="badge high">default</span>{% endif %}
+        </td>
+        <td>{{ m.sources }}</td>
+        <td>
+          {{ m.label }}
+          {% if m.llm_recommended %}
+            <div class="muted">local LLM advised —
+              {% for llm in llm_backends %}
+                <a href="{{ llm.url }}" target="_blank" rel="noopener noreferrer">{{ llm.name }}</a>{% if not loop.last %} or {% endif %}
+              {% endfor %}
+            </div>
+          {% endif %}
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  <p class="muted">
+    Tier 1-3 are curated by hand. Tier 4 and up are bulk-converted from public
+    community-maintained datasets and are <b>not</b> verified by probing the sites.
+  </p>
+</section>
+
 {% for category, rows in by_category | dictsort %}
 <section>
   <h2>{{ category }} <span class="muted">({{ rows | length }})</span></h2>
   <table class="coverage">
-    <thead><tr><th>Source</th><th>Identifier</th><th>What it returns</th><th>Default</th></tr></thead>
+    <thead><tr><th>Source</th><th>Identifier</th><th>What it returns</th><th>Mode</th><th>Default</th></tr></thead>
     <tbody>
-      {% for row in rows %}
+      {% for row in rows | sort(attribute='tier') %}
       <tr>
         <td>
           {% if row.docs_url %}<a href="{{ row.docs_url }}" rel="noopener noreferrer nofollow">{{ row.name }}</a>
@@ -33,6 +70,9 @@
         </td>
         <td>{{ row.kind }}</td>
         <td>{{ row.description }}</td>
+        <td>{% if row.tier <= default_mode %}<span class="badge high">{{ row.tier }}</span>
+            {% elif row.tier <= 7 %}<span class="badge medium">{{ row.tier }}</span>
+            {% else %}<span class="badge low">{{ row.tier }}</span>{% endif %}</td>
         <td>{% if row.enabled_by_default %}<span class="badge high">on</span>
             {% else %}<span class="badge low">off</span>{% endif %}</td>
       </tr>

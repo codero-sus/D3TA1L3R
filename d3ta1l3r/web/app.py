@@ -90,6 +90,15 @@ from ..llm import (
 )
 from ..llm import models as model_catalog
 from ..models import Confidence, ScanEvent, ScanReport, ScanTarget
+from ..modes import (
+    LLM_RECOMMENDED_FROM,
+    LOCAL_LLMS,
+    MAX_MODE,
+    MIN_MODE,
+    false_positive_note,
+    llm_recommendation,
+    summarise,
+)
 from ..sources.probe import load_site_specs
 from ..vault import Vault, VaultError, VaultKind
 from .auth import (
@@ -190,6 +199,7 @@ class ScanRequest(BaseModel):
     exclude_sources: list[str] | None = None
     categories: list[str] | None = None
     kinds: list[str] | None = None
+    mode: int | None = Field(default=None, ge=MIN_MODE, le=MAX_MODE)
     max_sites: int | None = Field(default=None, ge=1, le=1000)
     min_confidence: Confidence | None = None
     respect_robots: bool | None = None
@@ -474,6 +484,19 @@ def create_app(settings: AppSettings | None = None) -> FastAPI:
             "auth_enabled": guard_on,
             "signed_in": _signed_in(request),
             "vault_ready": settings.vault_ready,
+            "default_mode": settings.config.mode,
+            "modes": summarise(load_site_specs()),
+            "llm_backends": [
+                {"id": llm.id, "name": llm.name, "url": llm.url, "hint": llm.hint}
+                for llm in LOCAL_LLMS
+            ],
+            # canonical text, so the page never paraphrases the advice
+            "mode_caveat": {
+                mode: false_positive_note(mode) for mode in range(MIN_MODE, MAX_MODE + 1)
+            },
+            "mode_advice": {
+                mode: llm_recommendation(mode) for mode in range(MIN_MODE, MAX_MODE + 1)
+            },
             **extra,
         }
 
@@ -731,6 +754,25 @@ def create_app(settings: AppSettings | None = None) -> FastAPI:
         engine = ScanEngine(settings.base_config())
         rows = engine.describe_sources()
         return {"count": len(rows), "sources": rows}
+
+    @app.get("/api/modes")
+    async def api_modes(_: None = Depends(require_session)) -> dict[str, Any]:
+        """The fifteen breadth modes, with what each one costs.
+
+        The dashboard's mode picker is built from this, so the caveat text and
+        the source counts cannot drift from the code that enforces them.
+        """
+        rows = summarise(load_site_specs())
+        return {
+            "default": settings.config.mode,
+            "llm_recommended_from": LLM_RECOMMENDED_FROM,
+            "llm_backends": [
+                {"id": llm.id, "name": llm.name, "url": llm.url, "hint": llm.hint}
+                for llm in LOCAL_LLMS
+            ],
+            "modes": rows,
+            "caveat": {row["mode"]: false_positive_note(row["mode"]) for row in rows},
+        }
 
     @app.get("/api/scans")
     async def api_scans(_: None = Depends(require_session)) -> dict[str, Any]:
@@ -1272,6 +1314,7 @@ def _scan_config(settings: AppSettings, payload: ScanRequest) -> ScanConfig:
         categories=frozenset(payload.categories or ()),
         kinds=frozenset(payload.kinds or ()),
         max_sites=payload.max_sites,
+        mode=payload.mode or base.mode,
         use_cache=True,
         cache_dir=base.cache_dir or (_cache_dir(settings.output_dir)),
     )

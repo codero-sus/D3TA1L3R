@@ -32,6 +32,7 @@ import random
 import re
 import string
 import sys
+import textwrap
 import time
 from collections.abc import Sequence
 from datetime import datetime, timezone
@@ -75,6 +76,15 @@ from .models import (
     ScanReport,
     ScanStatus,
     ScanTarget,
+)
+from .modes import (
+    DEFAULT_MODE,
+    LLM_RECOMMENDED_FROM,
+    MAX_MODE,
+    MIN_MODE,
+    false_positive_note,
+    llm_recommendation,
+    summarise,
 )
 from .updater import (
     BRANCH_ENV,
@@ -153,6 +163,10 @@ def build_parser() -> argparse.ArgumentParser:
                       help="comma-separated identifier kinds: username,email,name,domain")
     scan.add_argument("--max-sites", type=int, default=None,
                       help="cap the number of sources (handy for a quick pass)")
+    scan.add_argument("-m", "--mode", type=int, default=DEFAULT_MODE,
+                      help=f"breadth mode {MIN_MODE}-{MAX_MODE}: probe every source whose tier is "
+                           f"<= N. Low modes are narrow and quiet, high modes are broad and "
+                           f"noisy (default {DEFAULT_MODE}, the curated core)")
     scan.add_argument("--min-confidence", choices=[c.value for c in Confidence], default=None,
                       help="only report findings at or above this confidence")
     scan.add_argument("--demo", action="store_true",
@@ -189,6 +203,9 @@ def build_parser() -> argparse.ArgumentParser:
     scan.add_argument("-v", "--verbose", action="store_true", help="stream per-source progress")
     scan.add_argument("-q", "--quiet", action="store_true",
                       help="only print the final summary line")
+
+    modes = sub.add_parser("modes", help="show the fifteen breadth modes and what each costs")
+    modes.add_argument("--json", action="store_true", help="machine-readable output")
 
     sources = sub.add_parser("sources", help="list every source and what it checks")
     sources.add_argument("--kind", default=None, help="filter by identifier kind")
@@ -664,6 +681,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     try:
         if args.command == "scan":
             return cmd_scan(args)
+        if args.command == "modes":
+            return cmd_modes(args)
         if args.command == "sources":
             return cmd_sources(args)
         if args.command == "calibrate":
@@ -698,6 +717,20 @@ def main(argv: Sequence[str] | None = None) -> int:
 # ---------------------------------------------------------------------------
 # scan
 # ---------------------------------------------------------------------------
+def _announce_mode(mode: int, console: _Console) -> None:
+    """Say what the mode costs before the results, not after them.
+
+    Above the curated core the caveat is not a footnote: it changes how the
+    findings should be read, so it is printed where it cannot be missed.
+    """
+    if mode <= 3:
+        return
+    console.note(f"mode {mode}: {false_positive_note(mode)}")
+    advice = llm_recommendation(mode) or ""
+    for line in textwrap.wrap(advice, width=76):
+        console.note(line)
+
+
 def cmd_scan(args: argparse.Namespace) -> int:
     usernames = _split_values(args.username)
     emails = _split_values(args.email)
@@ -722,6 +755,7 @@ def cmd_scan(args: argparse.Namespace) -> int:
     # Machine-readable stdout must stay parseable: human output goes to stderr then.
     human_stream = sys.stderr if args.stdout == "json" else sys.stdout
     console = _Console(verbose=args.verbose, quiet=args.quiet, stream=human_stream)
+    _announce_mode(config.mode, console)
     min_confidence = Confidence(args.min_confidence) if args.min_confidence else None
     exit_code = EXIT_OK
 
@@ -804,6 +838,49 @@ def _filter_confidence(report: ScanReport, minimum: Confidence) -> ScanReport:
 # ---------------------------------------------------------------------------
 # sources
 # ---------------------------------------------------------------------------
+def cmd_modes(args: argparse.Namespace) -> int:
+    """Print the fifteen breadth modes: what each one adds, and what it costs.
+
+    The point of this table is that breadth is not free. Every row is an
+    explicit trade the operator makes, stated in public rather than buried in
+    the data file.
+    """
+    from .sources.probe import load_site_specs
+
+    rows = summarise(load_site_specs())
+    if getattr(args, "json", False):
+        print(json.dumps(rows, indent=2))
+        return EXIT_OK
+
+    print()
+    print("  breadth modes — coverage costs false positives")
+    print()
+    print(f"  {'mode':>4}  {'sites':>6}  {'enabled':>7}  what it adds")
+    print(f"  {'----':>4}  {'------':>6}  {'-------':>7}  -----------")
+    for row in rows:
+        marker = "  <- default" if row["mode"] == DEFAULT_MODE else ""
+        llm = "  [local LLM advised]" if row["llm_recommended"] else ""
+        print(
+            f"  {row['mode']:>4}  {row['sources']:>6}  {row['enabled']:>7}  {row['label']}"
+            f"{marker}{llm}"
+        )
+    print()
+    print("  tiers 1-3   curated core, written and reviewed by hand")
+    print("  tiers 4-7   catalogue entries requiring positive evidence (a found-marker)")
+    print("  tiers 8-11  not-found phrases and plain status codes")
+    print("  tiers 12-15 status-only probes, bot-protected sites, adult sites")
+    print()
+    print(f"  default: mode {DEFAULT_MODE} — {false_positive_note(DEFAULT_MODE)}")
+    print()
+    advice = llm_recommendation(LLM_RECOMMENDED_FROM) or ""
+    for line in textwrap.wrap(advice, width=74):
+        print(f"  {line}")
+    print()
+    print("  `d3ta1l3r scan -u <handle> --mode N`")
+    print()
+    return EXIT_OK
+
+
 def cmd_sources(args: argparse.Namespace) -> int:
     """List the source inventory — or the phrases the not-found detector looks for."""
     if getattr(args, "not_found_phrases", False):
@@ -2195,6 +2272,8 @@ def _config_from_args(
             overrides["kinds"] = frozenset(_split_values([args.kind]))
         if getattr(args, "max_sites", None):
             overrides["max_sites"] = args.max_sites
+        if getattr(args, "mode", None) is not None:
+            overrides["mode"] = args.mode
     return ScanConfig.from_env(**overrides)
 
 
