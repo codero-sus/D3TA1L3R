@@ -59,7 +59,13 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel, Field
 
-from .. import __version__
+from .. import (
+    __author__,
+    __author_url__,
+    __author_website__,
+    __repository__,
+    __version__,
+)
 from ..breach import (
     BreachConfig,
     BreachReport,
@@ -459,6 +465,10 @@ def create_app(settings: AppSettings | None = None) -> FastAPI:
         return {
             "request": request,
             "version": __version__,
+            "author": __author__,
+            "author_url": __author_url__,
+            "author_website": __author_website__,
+            "repository": __repository__,
             "title": settings.title,
             "demo_default": settings.demo,
             "auth_enabled": guard_on,

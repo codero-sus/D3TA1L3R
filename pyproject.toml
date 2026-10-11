@@ -8,8 +8,14 @@ version = "0.1.0"
 description = "Self-audit OSINT toolkit: automated discovery of your own public footprint across public sites and unauthenticated APIs."
 readme = "README.md"
 requires-python = ">=3.10"
-authors = [{ name = "D3TA1L3R contributors" }]
+authors = [
+  { name = "codero-sus", email = "noreply@github.com" },
+]
+maintainers = [
+  { name = "codero-sus", email = "noreply@github.com" },
+]
 keywords = ["osint", "self-audit", "privacy", "digital-footprint", "reconnaissance"]
+
 classifiers = [
   "Development Status :: 4 - Beta",
   "Environment :: Console",
@@ -26,6 +32,13 @@ dependencies = [
   # Vault: scrypt + Fernet for the encrypted watchlist (`d3ta1l3r vault`).
   "cryptography>=42",
 ]
+
+[project.urls]
+Homepage = "https://the-codero.web.app/"
+Repository = "https://github.com/codero-sus/D3TA1L3R"
+Author = "https://github.com/codero-sus"
+Website = "https://the-codero.web.app/"
+Issues = "https://github.com/codero-sus/D3TA1L3R/issues"
 
 [project.optional-dependencies]
 web = [

@@ -797,6 +797,73 @@
     loadAskSetup();
   }
 
+  /* -----------------------------------------------------------------------
+     Chrome: the decorative layer. Everything here is optional — if any of it
+     is missing the dashboard still works, which is why the reveal class is
+     added here rather than in the markup.
+     ----------------------------------------------------------------------- */
+
+  function prefersReducedMotion() {
+    return !!(window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches);
+  }
+
+  /** Drop a shadow under the sticky header once the page has actually moved. */
+  function wireScrollShadow() {
+    const bar = document.querySelector(".topbar");
+    if (!bar) return;
+    const update = () => bar.classList.toggle("is-scrolled", window.scrollY > 6);
+    update();
+    window.addEventListener("scroll", update, { passive: true });
+  }
+
+  /** Fade sections in as they scroll into view. */
+  function wireReveal() {
+    const targets = document.querySelectorAll("[data-reveal]");
+    if (!targets.length) return;
+    if (prefersReducedMotion() || !("IntersectionObserver" in window)) return;
+    const observer = new IntersectionObserver(
+      (entries) => {
+        entries.forEach((entry) => {
+          if (!entry.isIntersecting) return;
+          entry.target.classList.add("is-visible");
+          observer.unobserve(entry.target);
+        });
+      },
+      { rootMargin: "0px 0px -8% 0px", threshold: 0.05 }
+    );
+    targets.forEach((node) => {
+      node.classList.add("reveal");
+      observer.observe(node);
+    });
+  }
+
+  /** A short-lived message in the corner. Text only: no HTML is ever parsed. */
+  function toast(message, kind, ms) {
+    let host = document.getElementById("toast-host");
+    if (!host) {
+      host = document.createElement("div");
+      host.id = "toast-host";
+      host.setAttribute("role", "status");
+      host.setAttribute("aria-live", "polite");
+      document.body.appendChild(host);
+    }
+    const node = document.createElement("div");
+    node.className = "toast" + (kind ? " " + kind : "");
+    node.textContent = message;
+    host.appendChild(node);
+    const remove = () => {
+      node.classList.add("leaving");
+      window.setTimeout(() => node.remove(), 220);
+    };
+    window.setTimeout(remove, ms || 4200);
+    return node;
+  }
+
+  function wireChrome() {
+    wireScrollShadow();
+    wireReveal();
+  }
+
   function boot() {
     const form = $("#scan-form");
     if (form) form.addEventListener("submit", startScan);
@@ -807,6 +874,7 @@
     wireAsk();
     wireVerify();
     wireModels();
+    wireChrome();
   }
 
   window.D3TA1L3R = {
@@ -819,6 +887,8 @@
     resetChat: resetChat,
     verifyIdentities: verifyIdentities,
     pullModel: pullModel,
+    toast: toast,
+    wireChrome: wireChrome,
   };
   if (document.readyState === "loading") {
     document.addEventListener("DOMContentLoaded", boot);

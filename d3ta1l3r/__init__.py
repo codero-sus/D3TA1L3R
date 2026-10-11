@@ -47,6 +47,15 @@ from .models import (
 )
 
 __version__ = "0.1.0"
+
+#: Who this is by. Kept here so the CLI, the dashboard footer and the packaged
+#: metadata cannot disagree about it; pyproject reads them at build time and
+#: the web layer passes them to every template.
+__author__ = "codero-sus"
+__author_url__ = "https://github.com/codero-sus"
+__author_website__ = "https://the-codero.web.app/"
+__repository__ = "https://github.com/codero-sus/D3TA1L3R"
+
 __all__ = [
     "Confidence",
     "ConfigError",
@@ -67,6 +76,10 @@ __all__ = [
     "SourceKind",
     "SourceOutcome",
     "UsageError",
+    "__author__",
+    "__author_url__",
+    "__author_website__",
+    "__repository__",
     "__version__",
 ]
 

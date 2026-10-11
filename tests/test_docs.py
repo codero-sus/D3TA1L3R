@@ -272,6 +272,29 @@ class TestReadme:
         # the two modes are told apart in the output
         assert '"mode"' in readme or "mode" in scope
 
+    def test_the_author_is_credited(self) -> None:
+        """The author asked to be credited; it must not vanish in a rewrite."""
+        readme = _read("README.md")
+        scope = _read("docs/SCOPE.md")
+        pyproject = (ROOT / "pyproject.toml").read_text(encoding="utf-8")
+        for text in (readme, pyproject):
+            assert "codero-sus" in text
+            assert "https://github.com/codero-sus" in text
+            assert "https://the-codero.web.app/" in text
+        assert "made with" in readme.lower()
+        assert "❤" in readme
+        # the credit lives in one place, so the UI and the package cannot drift
+        init = (ROOT / "d3ta1l3r" / "__init__.py").read_text(encoding="utf-8")
+        assert 'codero-sus' in init
+        assert "__author_url__" in init and "__author_website__" in init
+        assert scope is not None
+
+    def test_the_dashboard_credits_the_author(self) -> None:
+        base = _read("d3ta1l3r/web/templates/base.html")
+        assert "codero-sus" in base or "{{ author }}" in base
+        assert "made with" in base
+        assert 'rel="noopener noreferrer"' in base, "external links need rel=noopener"
+
     def test_the_updater_wrappers_are_documented(self) -> None:
         readme = _read("README.md")
         scope = _read("docs/SCOPE.md")
