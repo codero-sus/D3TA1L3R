@@ -903,6 +903,59 @@
     render();
   }
 
+  /**
+   * The leak-dump search panel. Applying it re-points the dump search and
+   * immediately re-runs the check, so a folder is either searched or visibly
+   * not — never quietly ignored.
+   */
+  function wireLeakSearch() {
+    const save = $("#leak-search-save");
+    if (!save) return;
+    const status = $("#leak-search-status");
+    const dirs = $("#corpus-dir");
+    const terms = $("#search-terms");
+    const recursive = $("#corpus-recursive");
+
+    // setStatus() is hard-wired to the scan form; this panel has its own slot.
+    const show = (node, message, isError) => {
+      if (!node) return;
+      node.textContent = message || "";
+      node.style.color = isError ? "var(--bad)" : "var(--muted)";
+    };
+
+    const split = (value) =>
+      String(value || "")
+        .split(",")
+        .map((item) => item.trim())
+        .filter(Boolean);
+
+    save.addEventListener("click", async () => {
+      save.disabled = true;
+      show(status, "applying…");
+      try {
+        const response = await fetch("/api/breach/config", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            corpora: split(dirs && dirs.value),
+            search_terms: split(terms && terms.value),
+            recursive: !!(recursive && recursive.checked),
+          }),
+        });
+        const body = await response.json();
+        if (!response.ok) {
+          throw new Error(body.detail || "the dashboard rejected the request");
+        }
+        show(status, "applied — re-checking…");
+        await runBreachCheck();
+      } catch (error) {
+        show(status, String(error.message || error), true);
+      } finally {
+        save.disabled = false;
+      }
+    });
+  }
+
   function boot() {
     const form = $("#scan-form");
     if (form) form.addEventListener("submit", startScan);
@@ -915,6 +968,7 @@
     wireModels();
     wireChrome();
     wireModePicker();
+    wireLeakSearch();
   }
 
   window.D3TA1L3R = {
@@ -930,6 +984,7 @@
     toast: toast,
     wireChrome: wireChrome,
     wireModePicker: wireModePicker,
+    wireLeakSearch: wireLeakSearch,
   };
   if (document.readyState === "loading") {
     document.addEventListener("DOMContentLoaded", boot);

@@ -38,7 +38,7 @@ These are hard limits, enforced by omission and by guards in code:
 | Refused | Where it is enforced |
 | --- | --- |
 | People-search brokers, data brokers, background-check services | No such source exists; `docs/SOURCES.md` explains why adding one is out of scope |
-| Breach corpora, credential dumps, paste-site lookups | D3TA1L3R never downloads, mirrors, scrapes or bundles one. There is no corpus in the repository, no "search the dumps" feature, and no aggregator endpoint anywhere in the code. Leak *checking* (§2a) only ever asks a service about your own identifier, or matches against a file you already have |
+| Breach corpora, credential dumps, paste-site lookups | D3TA1L3R never downloads, mirrors, scrapes or bundles one. There is no corpus in the repository, no downloader, no aggregator endpoint and no leak-search service anywhere in the code. Leak *checking* (§2a) only ever asks a service about your own identifier, or matches against files you already have (§2c) |
 | Phone number, home address, relatives, "who lives at" lookups | Not implemented; `validate_username` also rejects the query shapes they would need |
 | Scraping behind a login, CAPTCHA solving, IP rotation, UA spoofing to evade blocks | `core/http.py` sends one honest User-Agent and treats 401/403 as `blocked`; sites that fight automation ship `enabled_by_default: false` |
 | Querying identifiers other than the ones supplied | Sources read `ScanTarget.identifiers` and nothing else; there is no pivot/enumeration step |
@@ -64,7 +64,7 @@ There are three breach sources, and each one is bounded by what it sends:
 | --- | --- | --- | --- |
 | `pwned_passwords` | nothing | **five hexadecimal characters of `SHA-1(password)`** — never the password, never the full hash | `pwned` with a count, or `clean` |
 | `hibp_breaches` | your own HIBP API key (`D3TA1L3R_HIBP_KEY`) | the email address itself, plus the key | `pwned` with the breach names, or `clean` |
-| `local_corpus` | a file *you* supply | nothing at all | `pwned`/`clean` per match in your file |
+| `local_corpus` | a file or folder *you* supply | nothing at all | `pwned`/`clean` per match in your files |
 
 Consequences that were designed in, not discovered later:
 
@@ -314,6 +314,59 @@ Tests assert what the wrappers must *not* contain: no `curl | sh`, no
 `Invoke-Expression`, no `eval`, no disabled TLS verification, and no release API
 of their own. The bans are checked against code with comments stripped, since
 the scripts explain why they avoid those things.
+
+## 2c. Searching leak dumps you already have
+
+`--corpus` / `--corpus-dir` match your watchlist against dumps on your own disk.
+The boundaries, because "search leaked databases" is a phrase that usually means
+the opposite of what this does:
+
+- **Nothing is fetched.** D3TA1L3R does not download, mirror, scrape, index or
+  bundle a leaked database, and it does not know where to get one. A corpus is a
+  path you supply. If you do not have the file, this feature does nothing — by
+  design, and not as a limitation to be worked around later.
+- **Nothing is uploaded.** The dump is streamed one line at a time and matched in
+  process. No corpus content, no hash of it and no count of its lines leaves the
+  machine. Memory scales with your watchlist, not with the dump.
+- **A hit is described, never quoted.** A match is reported as "found in a local
+  corpus as a sha1 digest" or "as a literal value". The matching line itself is
+  never copied into the report, because a report is something people paste into
+  an issue or a chat window.
+- **Search terms are not stored.** `--term "Alice Doe"` checks a private string
+  that is not an account — a name, an address, an old handle. It is converted
+  into a synthetic entry for one run and then discarded: never written to the
+  vault, never written to a config file, never logged. It is held in memory for
+  the life of the process and disappears when it exits.
+- **A file that cannot be read is a named gap.** A missing path, a directory
+  without permission, a binary file: each is reported rather than silently
+  skipped. Skipping it would delete the one source whose job is to say "I could
+  not check this", and a dump that was never searched would look like a clean
+  result.
+
+### Automatic runs are local-only
+
+The dashboard re-checks the watchlist **on sign-in** and **after every scan**,
+and those automatic runs are restricted to local corpus sources.
+
+This is the important part, so it is worth being explicit about why. Signing in
+is the one action you take without thinking about it. If an automatic run were
+free to use every configured source, then every time you unlocked the dashboard
+you would be telling a third party, unprompted, exactly which addresses,
+usernames and passwords you are watching. A breach-checking tool should never be
+the thing that broadcasts your watchlist on a schedule.
+
+So:
+
+- an automatic run uses `local_corpus` sources and one `pwned_passwords`-style
+  verifier check only if a verifier already exists — and never a remote
+  account lookup;
+- a **manual** run (the **Check now** button, or `d3ta1l3r breach run`) is
+  unrestricted and uses every source you configured, because you asked;
+- a demonstration run is treated as local, because the demo transport is a
+  fixture on this machine and there is no third party to tell.
+
+If you want an automatic run to use remote sources anyway, that is your call to
+make deliberately and it is off by default.
 
 ## 3. Why the limits are where they are
 

@@ -258,6 +258,37 @@ usually go wrong:
   `breach run` exits `3` when something was found and `2` when nothing could be
   checked at all — so a CI job can tell "clean" from "we could not look".
 
+### Searching leak dumps you already have
+
+`--corpus` and `--corpus-dir` search dumps for your own information. Point it at
+a folder and every readable file inside is streamed once and matched against
+your watchlist:
+
+```bash
+d3ta1l3r breach run --corpus-dir ~/leaks            # a folder of dumps
+d3ta1l3r breach run --corpus-dir ~/leaks --corpus-recursive
+d3ta1l3r breach run --corpus combo.txt.gz           # gzip is read directly
+```
+
+`--term` searches for a private string that is not an account — a name, an
+address, an old handle. It is checked alongside the watchlist and **never
+written to the vault or to disk**:
+
+```bash
+d3ta1l3r breach run --corpus-dir ~/leaks --term "Alice Doe" --term "+14155550123"
+```
+
+Matching is exact on the normalised value, and each watched identifier is also
+indexed by SHA-1/256/512 so a corpus of hashes works as well as a corpus of
+addresses. Files are streamed rather than loaded, so a multi-gigabyte dump costs
+memory proportional to your watchlist, not to the dump.
+
+**Automatic runs stay on the machine.** The dashboard re-checks the watchlist on
+sign-in and after every scan, and those automatic runs are restricted to *local*
+dump searches. A check that fires on its own should never be the thing that
+tells a remote service which identifiers you watch. Manual runs — the
+**Check now** button, or `breach run` — use every source you have configured.
+
 Everything above also happens from the dashboard: `d3ta1l3r web --vault` asks for
 the vault passphrase **at login** (there is no second password to remember) and
 re-checks the watchlist the moment you sign in. The passphrase is entered in the

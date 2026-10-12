@@ -27,10 +27,13 @@ from d3ta1l3r.breach import (
     LocalCorpusSource,
     PwnedPasswordsSource,
     build_breach_sources,
+    expand_corpora,
     hash_corpus_lines,
+    local_only_sources,
     record_outcomes,
     render_breach_markdown,
     run_breach_check,
+    search_term_entries,
     transient_password_entry,
 )
 from d3ta1l3r.errors import UsageError
@@ -602,3 +605,132 @@ def _empty_report(entries: list[VaultEntry]):
 
     report = BreachReport(entries=entries)
     return report
+
+
+class TestCorpusDirectories:
+    """Pointing at a folder of dumps instead of naming files one at a time."""
+
+    def test_a_directory_becomes_its_files(self, tmp_path: Path) -> None:
+        dump = tmp_path / "leaks"
+        dump.mkdir()
+        (dump / "a.txt").write_text("alice@example.com\n", encoding="utf-8")
+        (dump / "b.txt").write_text("bob@example.com\n", encoding="utf-8")
+        files, notes = expand_corpora([dump])
+        assert {path.name for path in files} == {"a.txt", "b.txt"}
+        assert any("2 corpus file(s)" in note for note in notes)
+
+    def test_files_are_passed_through_untouched(self, tmp_path: Path) -> None:
+        one = tmp_path / "one.txt"
+        one.write_text("x\n", encoding="utf-8")
+        files, _ = expand_corpora([one])
+        assert files == (one,)
+
+    def test_the_same_file_twice_is_counted_once(self, tmp_path: Path) -> None:
+        one = tmp_path / "one.txt"
+        one.write_text("x\n", encoding="utf-8")
+        files, _ = expand_corpora([one, one, str(one)])
+        assert len(files) == 1
+
+    def test_a_directory_is_only_descended_on_request(self, tmp_path: Path) -> None:
+        dump = tmp_path / "leaks"
+        (dump / "nested").mkdir(parents=True)
+        (dump / "nested" / "deep.txt").write_text("x\n", encoding="utf-8")
+        shallow, _ = expand_corpora([dump])
+        assert shallow == ()
+        deep, _ = expand_corpora([dump], recursive=True)
+        assert [path.name for path in deep] == ["deep.txt"]
+
+    def test_dotfiles_are_ignored(self, tmp_path: Path) -> None:
+        dump = tmp_path / "leaks"
+        dump.mkdir()
+        (dump / ".DS_Store").write_text("junk", encoding="utf-8")
+        (dump / "real.txt").write_text("x\n", encoding="utf-8")
+        files, _ = expand_corpora([dump])
+        assert [path.name for path in files] == ["real.txt"]
+
+    def test_binary_files_are_skipped(self, tmp_path: Path) -> None:
+        dump = tmp_path / "leaks"
+        dump.mkdir()
+        (dump / "blob.bin").write_bytes(b"\x00\x01\x02\x00")
+        (dump / "real.txt").write_text("x\n", encoding="utf-8")
+        files, _ = expand_corpora([dump])
+        assert [path.name for path in files] == ["real.txt"]
+
+    def test_gzipped_dumps_are_read(self, tmp_path: Path) -> None:
+        import gzip
+
+        dump = tmp_path / "leaks"
+        dump.mkdir()
+        with gzip.open(dump / "combo.txt.gz", "wt", encoding="utf-8") as handle:
+            handle.write("alice@example.com:hunter2\n")
+        files, _ = expand_corpora([dump])
+        assert [path.name for path in files] == ["combo.txt.gz"]
+        source = LocalCorpusSource(files[0])
+        watched = entry(VaultKind.EMAIL, "alice@example.com")
+        source.prepare([watched], BreachConfig())
+        assert watched.entry_id in source._matches
+
+    def test_a_missing_path_is_kept_so_it_stays_a_named_gap(self, tmp_path: Path) -> None:
+        """Dropping it would delete the source that says "I could not check"."""
+        missing = tmp_path / "gone.txt"
+        files, notes = expand_corpora([missing])
+        assert files == (missing,)
+        assert any("no such file" in note for note in notes)
+        source = LocalCorpusSource(missing)
+        usable, reason = source.available(BreachConfig())
+        assert not usable and "no corpus file" in reason
+
+
+class TestSearchTerms:
+    """Private strings that are not accounts, searched without being stored."""
+
+    def test_a_term_becomes_a_synthetic_entry(self) -> None:
+        entries = search_term_entries(["Alice Doe", "  ", "+14155550123"])
+        assert len(entries) == 2
+        assert entries[0].value == "Alice Doe"
+        assert entries[1].value == "+14155550123"
+
+    def test_terms_are_labelled_and_marked_unstored(self) -> None:
+        synthetic = search_term_entries(["Alice Doe"])[0]
+        assert "search term" in synthetic.label
+        assert "never stored" in synthetic.notes
+
+    def test_two_terms_get_stable_distinct_ids(self) -> None:
+        first, second = search_term_entries(["a", "b"])
+        assert first.entry_id != second.entry_id
+        assert search_term_entries(["a"])[0].entry_id == first.entry_id
+
+    def test_a_term_is_matched_against_a_corpus(self, tmp_path: Path) -> None:
+        dump = tmp_path / "combo.txt"
+        dump.write_text("Alice Doe:hunter2\n", encoding="utf-8")
+        source = LocalCorpusSource(dump)
+        entries = search_term_entries(["Alice Doe"])
+        source.prepare(entries, BreachConfig())
+        assert entries[0].entry_id in source._matches
+
+    def test_the_report_masks_the_term(self, tmp_path: Path) -> None:
+        """A report gets pasted into chats; it must not carry the private string."""
+        synthetic = search_term_entries(["Alice Doe"])[0]
+        assert "Alice Doe" not in synthetic.masked
+
+
+class TestAutomaticRunsStayLocal:
+    """The rule an automatic breach run has to obey."""
+
+    def test_local_sources_are_the_only_ones_left(self, tmp_path: Path) -> None:
+        dump = tmp_path / "combo.txt"
+        dump.write_text("alice@example.com\n", encoding="utf-8")
+        config = BreachConfig(corpora=(dump,))
+        kept = local_only_sources(build_breach_sources(config))
+        assert kept
+        assert all(not source.uses_network for source in kept)
+        assert all(isinstance(source, LocalCorpusSource) for source in kept)
+
+    def test_with_no_corpus_there_is_nothing_local_to_run(self) -> None:
+        assert local_only_sources(build_breach_sources(BreachConfig())) == []
+
+    def test_the_policy_defaults_to_not_phoning_home(self) -> None:
+        config = BreachConfig()
+        assert config.auto_remote is False
+        assert config.auto_on_unlock is True
+        assert config.auto_after_scan is True

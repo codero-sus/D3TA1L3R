@@ -174,9 +174,46 @@
         <button id="breach-run" type="button">Check now</button>
         <span class="status" id="breach-run-status"></span>
       </div>
+
+      <details class="leak-search">
+        <summary>Search leak dumps on this machine</summary>
+        <p class="muted">
+          Point D3TA1L3R at a folder of dumps you already have. Every readable file
+          inside is streamed once and matched against your watchlist — nothing is
+          uploaded, and D3TA1L3R never downloads a dump for you.
+        </p>
+        <div class="fields">
+          <label>Dump folder
+            <input type="text" id="corpus-dir" name="corpus_dir" spellcheck="false"
+                   placeholder="~/leaks" value="{{ breach_corpus_dirs | join(', ') }}">
+          </label>
+          <label>Private strings to look for <span class="hint">(a name, an address, an old handle — never stored in the vault)</span>
+            <input type="text" id="search-terms" name="search_terms" spellcheck="false"
+                   placeholder="Alice Doe, +14155550123"
+                   value="{{ breach_search_terms | join(', ') }}">
+          </label>
+        </div>
+        <label class="check">
+          <input type="checkbox" id="corpus-recursive" name="corpus_recursive"
+                 {% if breach_recursive %}checked{% endif %}>
+          Search sub-folders too
+        </label>
+        <div class="actions">
+          <button id="leak-search-save" type="button">Apply and re-check</button>
+          <span class="status" id="leak-search-status"></span>
+        </div>
+        <p class="fineprint">
+          Held in memory for this session only. A search term is a private string, so it
+          is deliberately never written to disk — not to the vault, not to a config file.
+        </p>
+      </details>
+
       <p class="fineprint">
-        Password checks send five characters of a SHA-1 hash. Email checks (only with an
-        HIBP key configured) send the address itself. Local corpus checks send nothing.
+        Automatic checks — on sign-in and after every scan — search local dumps only,
+        so signing in never tells a remote service which identifiers you watch.
+        Manual checks use everything you have configured: passwords send five
+        characters of a SHA-1 hash, email checks (only with an HIBP key) send the
+        address itself, and local corpus checks send nothing.
         A source that cannot answer is reported as a <b>gap</b>, never as a clean result.
       </p>
     </div>
