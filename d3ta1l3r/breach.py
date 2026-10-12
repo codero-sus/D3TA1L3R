@@ -44,6 +44,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import gzip
 import hashlib
 import json
 import os
@@ -71,12 +72,16 @@ __all__ = [
     "LocalCorpusSource",
     "PwnedPasswordsSource",
     "build_breach_sources",
+    "corpus_files",
     "demo_transport",
+    "expand_corpora",
     "hash_corpus_lines",
+    "local_only_sources",
     "record_outcomes",
     "render_breach_markdown",
     "run_breach_check",
     "save_breach_report",
+    "search_term_entries",
     "transient_password_entry",
 ]
 
@@ -160,8 +165,33 @@ class BreachConfig:
 
     hibp_api_key: str = ""
     corpora: tuple[Path, ...] = ()
+    """Files *or directories*. A directory is expanded into the corpus files
+    inside it, so a folder of dumps can be searched in one go."""
+
+    recursive_corpus: bool = False
+    """Descend into sub-directories when expanding a corpus directory."""
+
+    search_terms: tuple[str, ...] = ()
+    """Private strings that are not identifiers — a name, an address, an old
+    handle. Searched alongside the watchlist without being stored in the vault."""
+
     include_unavailable_sources: bool = True
     demo: bool = False
+
+    # -- automatic runs ---------------------------------------------------
+    auto_on_unlock: bool = True
+    """Run the local dump search as soon as the vault is unlocked."""
+
+    auto_after_scan: bool = True
+    """Run the local dump search again after a scan finishes."""
+
+    auto_remote: bool = False
+    """Let an *automatic* run use sources that contact a third party.
+
+    Off by default, and deliberately: an automatic check that phones home would
+    tell a remote service which identifiers you watch, every time you sign in.
+    Manual runs are unaffected and use every configured source.
+    """
 
     @classmethod
     def from_env(cls, **overrides: Any) -> BreachConfig:
@@ -197,6 +227,14 @@ class BreachSource:
     homepage: str = ""
     sends_data: str = ""
     """Human-readable statement of what leaves the machine (shown by the CLI/UI)."""
+
+    uses_network: bool = True
+    """Whether this source talks to anything off the machine.
+
+    An *automatic* run is restricted to sources that do not. A breach scan that
+    fires on its own should never be the thing that tells a third party what you
+    were worried enough to look for.
+    """
 
     def __init__(self, fetcher: Fetcher | None = None) -> None:
         self.fetcher = fetcher
@@ -503,6 +541,7 @@ class LocalCorpusSource(BreachSource):
     docs_url = "https://github.com/codero-sus/D3TA1L3R/blob/main/docs/SCOPE.md"
     homepage = ""
     sends_data = "nothing — matching happens entirely on this machine"
+    uses_network = False
 
     def __init__(self, corpus: Path, *, name: str | None = None) -> None:
         super().__init__()
@@ -535,7 +574,7 @@ class LocalCorpusSource(BreachSource):
         if not wanted:
             return
         try:
-            with self.corpus.open("r", encoding="utf-8", errors="replace") as handle:
+            with _open_corpus(self.corpus) as handle:
                 for raw in handle:
                     self._lines += 1
                     key = _corpus_line_key(raw)
@@ -991,6 +1030,116 @@ def _corpus_line_key(raw_line: str) -> str | None:
     return f"plain:{lowered}"
 
 
+def _open_corpus(path: Path):
+    """A text handle for a corpus file, transparently decompressing ``.gz``.
+
+    Real dumps are almost always gzipped, and asking someone to inflate several
+    gigabytes before the tool will even look is asking them not to bother.
+    """
+    if path.suffix.lower() == ".gz":
+        return gzip.open(path, "rt", encoding="utf-8", errors="replace")
+    return path.open("r", encoding="utf-8", errors="replace")
+
+
+def _looks_binary(path: Path) -> bool:
+    """Cheap NUL-byte sniff: a binary blob is not a line-oriented corpus."""
+    try:
+        with path.open("rb") as handle:
+            return b"\x00" in handle.read(4096)
+    except OSError:
+        return True
+
+
+def _corpus_files_in(directory: Path, *, recursive: bool = False) -> list[Path]:
+    """Corpus files inside ``directory``, deterministic and dotfile-free."""
+    pattern = directory.rglob("*") if recursive else directory.glob("*")
+    found: list[Path] = []
+    for path in sorted(pattern):
+        if not path.is_file() or path.name.startswith("."):
+            continue
+        if path.suffix.lower() == ".gz" or not _looks_binary(path):
+            found.append(path)
+    return found
+
+
+def expand_corpora(
+    paths: Iterable[Path | str], *, recursive: bool = False
+) -> tuple[tuple[Path, ...], list[str]]:
+    """Turn a mix of files and directories into a de-duplicated file list.
+
+    Pointing at a *folder* of dumps is the normal way to search a leak
+    collection, so directories are expanded rather than rejected. Returns
+    ``(files, notes)`` — the notes say what was skipped, because a corpus that
+    silently went unsearched is worse than one that never got added: it looks
+    like a clean result.
+    """
+    files: list[Path] = []
+    notes: list[str] = []
+    for raw in paths or ():
+        path = Path(raw).expanduser()
+        if path.is_dir():
+            found = _corpus_files_in(path, recursive=recursive)
+            if found:
+                files.extend(found)
+                notes.append(f"{path}: {len(found)} corpus file(s)")
+            else:
+                notes.append(f"{path}: no readable corpus files inside")
+        else:
+            # A path that is neither readable file nor directory is kept, not
+            # dropped. Discarding it would delete the source that reports
+            # "I could not check this", and an unsearched corpus would quietly
+            # start looking like a clean result.
+            files.append(path)
+            notes.append(f"{path}: no such file or directory")
+
+    seen: set[str] = set()
+    unique: list[Path] = []
+    for path in files:
+        try:
+            key = str(path.resolve())
+        except OSError:  # pragma: no cover - broken symlink or vanished file
+            key = str(path)
+        if key not in seen:
+            seen.add(key)
+            unique.append(path)
+    return tuple(unique), notes
+
+
+def corpus_files(config: BreachConfig) -> tuple[tuple[Path, ...], list[str]]:
+    """The expanded corpus file list for a config, plus notes about skips."""
+    return expand_corpora(config.corpora, recursive=config.recursive_corpus)
+
+
+def search_term_entries(terms: Iterable[str]) -> list[VaultEntry]:
+    """Synthetic entries so private strings can be searched without a vault row.
+
+    A name, an old handle or a street address is exactly the thing you would
+    want to find in a dump, and it has nowhere to live in the vault: it is not
+    an account. These are built for one run and never written back, so a term
+    can be checked without becoming part of the stored watchlist.
+    """
+    entries: list[VaultEntry] = []
+    for index, raw in enumerate(terms or (), start=1):
+        term = str(raw or "").strip()
+        if not term:
+            continue
+        entries.append(
+            VaultEntry(
+                kind=VaultKind.USERNAME,
+                value=term,
+                label=f"search term {index}",
+                entry_id=f"term-{index}",
+                notes="ad-hoc search term; never stored in the vault",
+            )
+        )
+    return entries
+
+
+def local_only_sources(sources: Iterable[BreachSource]) -> list[BreachSource]:
+    """The subset that answers without contacting anything. Used for auto runs."""
+    return [source for source in sources if not source.uses_network]
+
+
 def hash_corpus_lines(lines: Iterable[str], *, algorithm: str = "sha256") -> list[str]:
     """Hash plaintext lines so a corpus can be kept and matched without the values.
 
@@ -1070,5 +1219,6 @@ def build_breach_sources(config: BreachConfig | None = None) -> list[BreachSourc
     """Default source set for a run (the orchestrator binds a fetcher to each)."""
     config = config or BreachConfig.from_env()
     sources: list[BreachSource] = [PwnedPasswordsSource(), HibpBreachedAccountSource()]
-    sources.extend(LocalCorpusSource(corpus) for corpus in config.corpora)
+    files, _notes = corpus_files(config)
+    sources.extend(LocalCorpusSource(corpus) for corpus in files)
     return sources

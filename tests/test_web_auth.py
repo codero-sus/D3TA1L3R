@@ -15,6 +15,7 @@ from typing import Any
 
 import pytest
 
+from d3ta1l3r.breach import BreachConfig
 from d3ta1l3r.errors import UsageError
 from d3ta1l3r.vault import Vault, VaultKind
 from d3ta1l3r.web.app import AppSettings, create_app
@@ -259,7 +260,13 @@ class TestOrigins:
 # ---------------------------------------------------------------------------
 # the dashboard itself
 # ---------------------------------------------------------------------------
-def build_app(tmp_path: Path, *, demo: bool = True, unlock: bool = False):
+def build_app(
+    tmp_path: Path,
+    *,
+    demo: bool = True,
+    unlock: bool = False,
+    breach_config: BreachConfig | None = None,
+):
     from starlette.testclient import TestClient as StarletteClient
 
     vault_path = tmp_path / "watchlist.vault"
@@ -271,6 +278,8 @@ def build_app(tmp_path: Path, *, demo: bool = True, unlock: bool = False):
         vault=Vault.open(vault_path, PASSPHRASE) if unlock else None,
         auth=AuthSettings(lockout_seconds=60),
     )
+    if breach_config is not None:
+        settings.breach_config = breach_config
     client = StarletteClient(create_app(settings), follow_redirects=False)
     return client, settings, vault_path
 
@@ -644,3 +653,175 @@ class TestVaultFromAFileOnDisk:
         raw = vault_path.read_text(encoding="utf-8")
         assert "alice@example.com" not in raw
         assert re.search(r'"payload": "[A-Za-z0-9_=-]+"', raw)
+
+
+class TestAutomaticBreachRunsStayLocal:
+    """An automatic run must not be the thing that tells a third party what you watch.
+
+    The dashboard re-checks the watchlist on sign-in and after every scan. That
+    is only acceptable if those runs stay on the machine, so they are restricted
+    to local dump searches unless the operator opts in.
+    """
+
+    def test_a_real_auto_run_with_no_corpus_contacts_nothing(
+        self, tmp_path: Path
+    ) -> None:
+        client, _settings, _vault = build_app(
+            tmp_path, demo=False, breach_config=BreachConfig()
+        )
+        with client:
+            sign_in(client)
+            client.post(
+                "/api/vault/entries",
+                json={"kind": "email", "value": "alice@example.com", "check_now": False},
+            )
+            client.post("/logout")
+            sign_in(client)
+            payload = wait_for_breach(client)
+            assert payload["status"] == "done"
+            assert payload["auto"] is True
+            # no local corpus was configured, so there was nothing safe to run
+            assert payload["report"] is None
+            assert any(
+                event.get("type") == "breach_skipped" for event in payload["events"]
+            ), payload["events"]
+
+    def test_a_manual_run_still_uses_every_source(self, tmp_path: Path) -> None:
+        """The restriction is about automatic runs, not about the feature."""
+        client, _settings, _vault = build_app(
+            tmp_path, demo=False, breach_config=BreachConfig()
+        )
+        with client:
+            sign_in(client)
+            client.post(
+                "/api/vault/entries",
+                json={"kind": "email", "value": "alice@example.com", "check_now": False},
+            )
+            client.post("/api/breach/check")
+            payload = wait_for_breach(client)
+            assert payload["auto"] is False
+            assert payload["report"] is not None
+
+    def test_a_corpus_makes_the_auto_run_happen(self, tmp_path: Path) -> None:
+        dump = tmp_path / "combo.txt"
+        dump.write_text("alice@example.com:hunter2\n", encoding="utf-8")
+        client, _settings, _vault = build_app(
+            tmp_path, demo=False, breach_config=BreachConfig(corpora=(dump,))
+        )
+        with client:
+            sign_in(client)
+            client.post(
+                "/api/vault/entries",
+                json={"kind": "email", "value": "alice@example.com", "check_now": False},
+            )
+            client.post("/logout")
+            sign_in(client)
+            payload = wait_for_breach(client)
+            assert payload["report"] is not None
+            statuses = [
+                check["status"]
+                for entry in payload["report"]["entries"]
+                for check in entry["checks"]
+            ]
+            assert "pwned" in statuses, payload["report"]
+
+    def test_search_terms_join_the_automatic_run(self, tmp_path: Path) -> None:
+        dump = tmp_path / "combo.txt"
+        dump.write_text("Alice Doe:hunter2\n", encoding="utf-8")
+        config = BreachConfig(corpora=(dump,), search_terms=("Alice Doe",))
+        client, _settings, _vault = build_app(tmp_path, demo=False, breach_config=config)
+        with client:
+            sign_in(client)
+            client.post("/logout")
+            sign_in(client)
+            payload = wait_for_breach(client)
+            assert payload["report"] is not None
+            labels = [entry["label"] for entry in payload["report"]["entries"]]
+            assert any("search term" in label for label in labels), labels
+
+
+class TestTheLeakSearchPanel:
+    def test_the_config_endpoint_returns_what_was_applied(self, tmp_path: Path) -> None:
+        client, settings, _vault = build_app(tmp_path, demo=False)
+        with client:
+            sign_in(client)
+            dump = tmp_path / "leaks"
+            dump.mkdir()
+            response = client.post(
+                "/api/breach/config",
+                json={"corpora": [str(dump)], "search_terms": ["Alice Doe"],
+                      "recursive": True},
+            )
+            assert response.status_code == 200, response.text
+            body = response.json()
+            assert body["search_terms"] == ["Alice Doe"]
+            assert body["recursive"] is True
+            # applied to the running config, not just echoed back
+            assert settings.breach_config.corpora == (dump,)
+            assert settings.breach_config.search_terms == ("Alice Doe",)
+
+    def test_it_says_the_terms_are_not_written_to_disk(self, tmp_path: Path) -> None:
+        """A search term is a private string; persisting it would be a worse leak."""
+        client, _settings, _vault = build_app(tmp_path, demo=False)
+        with client:
+            sign_in(client)
+            body = client.post(
+                "/api/breach/config", json={"search_terms": ["Alice Doe"]}
+            ).json()
+            assert body["persisted"] is False
+            assert "never written to disk" in body["note"]
+
+    def test_it_needs_a_session(self, tmp_path: Path) -> None:
+        client, _settings, _vault = build_app(tmp_path, demo=False)
+        with client:
+            response = client.post("/api/breach/config", json={"corpora": []})
+            assert response.status_code in {303, 401, 403}, response.status_code
+
+    def test_the_dashboard_ships_the_panel(self, tmp_path: Path) -> None:
+        client, _settings, _vault = build_app(tmp_path)
+        with client:
+            sign_in(client)
+            page = client.get("/").text
+            assert 'id="corpus-dir"' in page
+            assert 'id="search-terms"' in page
+            assert 'id="corpus-recursive"' in page
+            assert "never written to disk" in page
+
+
+class TestBreachRunsAfterAScan:
+    def test_a_finished_scan_triggers_the_local_dump_search(self, tmp_path: Path) -> None:
+        dump = tmp_path / "combo.txt"
+        dump.write_text("demo_user:hunter2\n", encoding="utf-8")
+        client, _settings, _vault = build_app(
+            tmp_path, demo=True, breach_config=BreachConfig(corpora=(dump,))
+        )
+        with client:
+            sign_in(client)
+            client.post(
+                "/api/vault/entries",
+                json={"kind": "username", "value": "demo_user", "check_now": False},
+            )
+            response = client.post(
+                "/api/scans", json={"username": "demo_user", "demo": True}
+            )
+            assert response.status_code == 202, response.text
+            run_id = response.json()["run_id"]
+
+            deadline = time.monotonic() + 25.0
+            while time.monotonic() < deadline:
+                state = client.get(f"/api/scans/{run_id}").json()
+                if state.get("status") in {"done", "error"}:
+                    break
+                time.sleep(0.2)
+            assert state["status"] == "done", state
+
+            payload = wait_for_breach(client)
+            assert payload["triggered_by"].startswith("scan:"), payload["triggered_by"]
+            assert payload["auto"] is True
+            assert payload["report"] is not None, payload
+            statuses = [
+                check["status"]
+                for entry in payload["report"]["entries"]
+                for check in entry["checks"]
+            ]
+            assert "pwned" in statuses, payload["report"]

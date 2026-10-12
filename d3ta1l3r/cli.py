@@ -45,10 +45,12 @@ from .breach import (
     BreachReport,
     BreachStatus,
     build_breach_sources,
+    expand_corpora,
     hash_corpus_lines,
     record_outcomes,
     run_breach_check,
     save_breach_report,
+    search_term_entries,
     transient_password_entry,
 )
 from .config import ScanConfig
@@ -256,8 +258,19 @@ def build_parser() -> argparse.ArgumentParser:
                                help="vault file with the watchlist to check")
     breach_common.add_argument("--passphrase-file", default=None,
                                help="read the vault passphrase from this file")
-    breach_common.add_argument("--corpus", action="append", default=[], metavar="FILE",
-                               help="local file of hashes/plaintext to match against (repeatable)")
+    breach_common.add_argument("--corpus", action="append", default=[], metavar="PATH",
+                               help="local file of hashes/plaintext to match against, or a "
+                                    "DIRECTORY of dumps to search (repeatable)")
+    breach_common.add_argument("--corpus-dir", action="append", default=[], metavar="DIR",
+                               help="directory of leak dumps to search; every readable file "
+                                    "inside becomes a corpus (repeatable)")
+    breach_common.add_argument("--corpus-recursive", action="store_true",
+                               help="descend into sub-directories of a --corpus-dir")
+    breach_common.add_argument("--term", action="append", default=[], metavar="STRING",
+                               help="private string to search the dumps for — a name, an "
+                                    "address, an old handle (repeatable, never stored)")
+    breach_common.add_argument("--no-auto", dest="auto", action="store_false", default=True,
+                               help="do not run the automatic local dump search")
     breach_common.add_argument("--hibp-key-file", default=None,
                                help="file holding your HIBP API key (the key is never an argument)")
     breach_common.add_argument("--demo", action="store_true",
@@ -1267,9 +1280,16 @@ def _breach_config(args: argparse.Namespace) -> BreachConfig:
     key_file = getattr(args, "hibp_key_file", None)
     if key_file:
         overrides["hibp_api_key"] = passphrase_from_file(key_file).strip()
-    corpora = tuple(Path(raw).expanduser() for raw in (getattr(args, "corpus", None) or ()))
+    raw_paths = list(getattr(args, "corpus", None) or ())
+    raw_paths += list(getattr(args, "corpus_dir", None) or ())
+    corpora = tuple(Path(raw).expanduser() for raw in raw_paths)
     if corpora:
         overrides["corpora"] = corpora
+    if getattr(args, "corpus_recursive", False):
+        overrides["recursive_corpus"] = True
+    terms = tuple(str(term) for term in (getattr(args, "term", None) or ()) if str(term).strip())
+    if terms:
+        overrides["search_terms"] = terms
     demo = getattr(args, "demo", False)
     return BreachConfig.from_env(demo=bool(demo), **overrides)
 
@@ -1584,10 +1604,18 @@ def _breach_run(args: argparse.Namespace) -> int:
     # Validate the paths the caller gave us before anything else: a typo in
     # --corpus is a usage error whether or not the watchlist happens to be empty.
     for corpus in config.corpora:
-        if not corpus.is_file():
-            raise UsageError(f"corpus file not found: {corpus}")
+        if not corpus.exists():
+            raise UsageError(f"corpus path not found: {corpus}")
 
-    entries = vault.watchlist()
+    # What the folder actually turned into, and anything it skipped. A corpus
+    # that silently went unsearched looks like a clean result, which is a lie.
+    _files, corpus_notes = expand_corpora(config.corpora, recursive=config.recursive_corpus)
+    if corpus_notes and not (getattr(args, "quiet", False) or getattr(args, "json", False)):
+        for note in corpus_notes:
+            print(f"  corpus: {note}", file=sys.stderr)
+
+    entries = list(vault.watchlist())
+    entries += search_term_entries(config.search_terms)
     if not entries:
         print("the watchlist is empty — add an identifier first:")
         print("  d3ta1l3r vault add --kind email you@example.com")

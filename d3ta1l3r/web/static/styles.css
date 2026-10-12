@@ -576,3 +576,38 @@ code { transition: border-color var(--fast) var(--ease); }
 .coverage tr {
   transition: background var(--fast) var(--ease);
 }
+
+/* Leak-dump search panel */
+
+.leak-search {
+  margin-top: 0.9rem;
+  padding-top: 0.7rem;
+  border-top: 1px solid var(--line);
+}
+
+.leak-search summary {
+  cursor: pointer;
+  font-weight: 600;
+  font-size: 0.92rem;
+  padding: 0.2rem 0;
+  transition: color var(--fast) var(--ease);
+}
+
+.leak-search summary:hover {
+  color: var(--accent);
+}
+
+.leak-search[open] summary {
+  color: var(--accent);
+  margin-bottom: 0.5rem;
+}
+
+.leak-search .fields {
+  margin: 0.6rem 0;
+}
+
+.leak-search .muted {
+  font-size: 0.84rem;
+  line-height: 1.5;
+  margin: 0 0 0.4rem;
+}

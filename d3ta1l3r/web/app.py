@@ -39,10 +39,12 @@ Two security notes that the routes depend on:
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import hashlib
 import json
 from collections import deque
-from dataclasses import dataclass, field
+from collections.abc import Callable
+from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -69,9 +71,12 @@ from .. import (
 from ..breach import (
     BreachConfig,
     BreachReport,
+    build_breach_sources,
+    local_only_sources,
     record_outcomes,
     run_breach_check,
     save_breach_report,
+    search_term_entries,
     transient_password_entry,
 )
 from ..config import RateLimitConfig, ScanConfig
@@ -366,6 +371,10 @@ class BreachState:
 
     status: str = "idle"  # idle | running | done | error
     triggered_by: str = ""
+    auto: bool = False
+    """True when the operator did not ask for this run. Automatic runs are
+    restricted to local dump searches, so signing in never quietly tells a
+    remote service which identifiers are on the watchlist."""
     report: BreachReport | None = None
     error: str | None = None
     started_at: datetime | None = None
@@ -377,6 +386,7 @@ class BreachState:
         payload: dict[str, Any] = {
             "status": self.status,
             "triggered_by": self.triggered_by,
+            "auto": self.auto,
             "started_at": self.started_at.isoformat() if self.started_at else None,
             "finished_at": self.finished_at.isoformat() if self.finished_at else None,
             "error": self.error,
@@ -484,6 +494,9 @@ def create_app(settings: AppSettings | None = None) -> FastAPI:
             "auth_enabled": guard_on,
             "signed_in": _signed_in(request),
             "vault_ready": settings.vault_ready,
+            "breach_corpus_dirs": [str(path) for path in settings.breach_config.corpora],
+            "breach_search_terms": list(settings.breach_config.search_terms),
+            "breach_recursive": settings.breach_config.recursive_corpus,
             "default_mode": settings.config.mode,
             "modes": summarise(load_site_specs()),
             "llm_backends": [
@@ -543,9 +556,10 @@ def create_app(settings: AppSettings | None = None) -> FastAPI:
     def _publish_breach(event: dict[str, Any]) -> None:
         breach.events.append(event)
 
-    async def _execute_breach(entries: list[Any], reason: str) -> None:
+    async def _execute_breach(entries: list[Any], reason: str, *, auto: bool = False) -> None:
         breach.status = "running"
         breach.triggered_by = reason
+        breach.auto = auto
         breach.started_at = datetime.now(timezone.utc)
         breach.error = None
         breach.events.clear()
@@ -556,11 +570,36 @@ def create_app(settings: AppSettings | None = None) -> FastAPI:
                 "total": len(entries),
             }
         )
+        # An automatic run is local-only unless the operator opted in: a check
+        # that fires on its own should not tell a third party what you watch.
+        sources = None
+        # Demo mode answers every request from a local fixture transport, so
+        # there is no third party to tell anything to and the reason for the
+        # restriction does not apply. Real runs stay local-only.
+        demo_run = bool(settings.demo or settings.breach_config.demo
+                        or settings.base_config().demo)
+        if auto and not (settings.breach_config.auto_remote or demo_run):
+            sources = local_only_sources(build_breach_sources(settings.breach_config))
+            if not sources:
+                breach.status = "done"
+                breach.report = None
+                breach.finished_at = datetime.now(timezone.utc)
+                _publish_breach(
+                    {
+                        "type": "breach_skipped",
+                        "message": (
+                            "no local dump search is configured, and automatic runs do "
+                            "not contact remote services (set auto_remote to allow it)"
+                        ),
+                    }
+                )
+                return
         try:
             report = await run_breach_check(
                 entries,
                 scan_config=settings.base_config(),
                 breach_config=settings.breach_config,
+                sources=sources,
                 on_event=_publish_breach,
             )
             breach.report = report
@@ -578,21 +617,35 @@ def create_app(settings: AppSettings | None = None) -> FastAPI:
             breach.finished_at = datetime.now(timezone.utc)
             _publish_breach({"type": "breach_finished", "status": breach.status})
 
-    def _start_breach_run(reason: str) -> bool:
-        """Kick off a watchlist check unless one is already in flight."""
+    def _start_breach_run(reason: str, *, auto: bool = False) -> bool:
+        """Kick off a watchlist check unless one is already in flight.
+
+        ``auto`` marks a run the operator did not ask for. Those are restricted
+        to local dump searches, so signing in never quietly tells a remote
+        service which identifiers are on the watchlist.
+        """
         if settings.vault is None:
             return False
-        entries = settings.vault.watchlist()
+        if auto and not settings.breach_config.auto_on_unlock and reason == "login":
+            return False
+        if auto and not settings.breach_config.auto_after_scan and reason.startswith("scan"):
+            return False
+        entries = list(settings.vault.watchlist())
+        entries += search_term_entries(settings.breach_config.search_terms)
         if not entries:
             breach.status = "done"
             breach.triggered_by = reason
+            breach.auto = auto
             breach.report = None
             breach.finished_at = datetime.now(timezone.utc)
             return False
         if breach.status == "running" and breach.task and not breach.task.done():
             return False
-        breach.task = asyncio.create_task(_execute_breach(entries, reason))
+        breach.task = asyncio.create_task(_execute_breach(entries, reason, auto=auto))
         return True
+
+    def _auto_breach(reason: str) -> None:
+        _start_breach_run(reason, auto=True)
 
     app.state.start_breach_run = _start_breach_run  # used by the CLI smoke path
 
@@ -662,8 +715,9 @@ def create_app(settings: AppSettings | None = None) -> FastAPI:
         throttle.record_success(key)
         settings.vault = unlocked  # now serve the watchlist for this process
         token, _ttl = sessions.issue()
-        # The requested behaviour: a fresh login re-checks the watchlist.
-        _start_breach_run("login")
+        # A fresh login re-checks the watchlist. It is an *automatic* run, so
+        # it only searches local dumps unless auto_remote is set.
+        _start_breach_run("login", auto=True)
         response = RedirectResponse(next_path, status_code=303)
         set_session_cookie(response, token, settings.auth)
         return response
@@ -804,7 +858,14 @@ def create_app(settings: AppSettings | None = None) -> FastAPI:
         config = _scan_config(settings, payload)
         run = RunState(run_id=_new_run_id(), targets=targets, demo=config.demo)
         runs[run.run_id] = run
-        run.task = asyncio.create_task(_execute_run(run, config, store))
+        run.task = asyncio.create_task(
+            _execute_run(
+                run,
+                config,
+                store,
+                on_finished=lambda finished: _auto_breach(f"scan:{finished.run_id}"),
+            )
+        )
         return JSONResponse(_run_payload(run), status_code=202)
 
     @app.get("/api/scans/{scan_id}/events")
@@ -1272,6 +1333,37 @@ def create_app(settings: AppSettings | None = None) -> FastAPI:
             return report
 
     # -- breach watch ----------------------------------------------------
+    @app.post("/api/breach/config")
+    async def api_breach_config(
+        request: Request, _: None = Depends(require_session)
+    ) -> dict[str, Any]:
+        """Point the dump search at a folder, and add private strings to look for.
+
+        Everything here is held in memory for the life of the process. A search
+        term is a private string — a name, an address — and writing those to a
+        config file on disk would be a worse leak than the one being looked for.
+        """
+        body = await request.json()
+        corpora = tuple(
+            Path(str(item)).expanduser() for item in (body.get("corpora") or ())
+        )
+        terms = tuple(
+            str(term) for term in (body.get("search_terms") or ()) if str(term).strip()
+        )
+        settings.breach_config = replace(
+            settings.breach_config,
+            corpora=corpora,
+            search_terms=terms,
+            recursive_corpus=bool(body.get("recursive")),
+        )
+        return {
+            "corpora": [str(path) for path in corpora],
+            "search_terms": list(terms),
+            "recursive": settings.breach_config.recursive_corpus,
+            "persisted": False,
+            "note": "held in memory for this session; search terms are never written to disk",
+        }
+
     @app.get("/api/breach")
     async def api_breach(_: None = Depends(require_vault)) -> dict[str, Any]:
         return breach.to_dict()
@@ -1339,7 +1431,12 @@ def _safe_next(value: str | None) -> str:
     return value
 
 
-async def _execute_run(run: RunState, config: ScanConfig, store: ScanStore) -> None:
+async def _execute_run(
+    run: RunState,
+    config: ScanConfig,
+    store: ScanStore,
+    on_finished: Callable[[RunState], None] | None = None,
+) -> None:
     run.status = "running"
     _publish(run, {"type": "run_started", "run_id": run.run_id, "demo": config.demo})
     try:
@@ -1375,6 +1472,11 @@ async def _execute_run(run: RunState, config: ScanConfig, store: ScanStore) -> N
     finally:
         run.finished_at = datetime.now(timezone.utc)
         _publish(run, {"type": "run_finished", "status": run.status})
+        if on_finished is not None:
+            # An automatic breach re-check after the scan. Kept out of the
+            # try/except above: a failure here must never fail the scan.
+            with contextlib.suppress(Exception):
+                on_finished(run)
 
 
 def _on_event(run: RunState, event: ScanEvent) -> None:

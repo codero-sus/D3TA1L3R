@@ -437,8 +437,38 @@ class TestBreachCommand:
         assert "alice@example.com" not in json.dumps(payload)
 
     def test_a_missing_corpus_is_a_usage_error(self, capsys) -> None:
+        # "--corpus" takes a file *or* a directory now, so the word is "path".
         assert main(["breach", "run", "--demo", "--corpus", "/nope/missing.txt"]) == EXIT_USAGE
-        assert "corpus file not found" in capsys.readouterr().err
+        assert "corpus path not found" in capsys.readouterr().err
+
+    def test_a_corpus_directory_is_searched(self, tmp_path, capsys) -> None:
+        dump = tmp_path / "leaks"
+        dump.mkdir()
+        (dump / "a.txt").write_text("alice@example.com:hunter2\n", encoding="utf-8")
+        (dump / "b.txt").write_text("bob@example.com\n", encoding="utf-8")
+        assert main(["vault", "add", "--kind", "email",
+                     "alice@example.com", "--no-check"]) == EXIT_OK
+        capsys.readouterr()
+        code = main(["breach", "run", "--demo", "--corpus-dir", str(dump),
+                     "-o", str(tmp_path)])
+        assert code == EXIT_NEW_FINDINGS, capsys.readouterr()
+        printed = capsys.readouterr().err
+        assert "2 corpus file(s)" in printed, printed
+
+    def test_a_search_term_is_checked_without_being_stored(self, tmp_path, capsys) -> None:
+        """A private string can be searched without becoming a vault entry."""
+        # "account:password" is the shape every combo list uses, and the
+        # matcher takes the part before the colon as the account.
+        dump = tmp_path / "dump.txt"
+        dump.write_text("Alice Doe:hunter2\n", encoding="utf-8")
+        capsys.readouterr()
+        code = main(["breach", "run", "--demo", "--corpus", str(dump),
+                     "--term", "Alice Doe", "-o", str(tmp_path)])
+        assert code == EXIT_NEW_FINDINGS, capsys.readouterr()
+        # and the vault still holds nothing: the term was never persisted
+        capsys.readouterr()
+        main(["vault", "list", "--json"])
+        assert json.loads(capsys.readouterr().out)["entries"] == []
 
     def test_corpus_hash_writes_hashes_not_values(self, tmp_path, capsys) -> None:
         source = tmp_path / "plain.txt"
