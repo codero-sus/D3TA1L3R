@@ -178,6 +178,8 @@ def render_markdown(report: ScanReport) -> str:
 # JSON
 # ---------------------------------------------------------------------------
 def render_json(report: ScanReport, *, indent: int | None = 2) -> str:
+    """Render a report as JSON. Fields are not sorted, so the file reads in the
+        same order as the markdown report."""
     return json.dumps(report.to_dict(), indent=indent, ensure_ascii=False, sort_keys=False)
 
 
@@ -357,9 +359,11 @@ class ReportDiff:
 
     @property
     def empty(self) -> bool:
+        """True when nothing changed between the two scans."""
         return not (self.new_findings or self.removed_findings or self.changed_sources)
 
     def to_dict(self) -> dict[str, Any]:
+        """Serialise the diff for JSON output."""
         return {
             "previous_scan_id": self.previous_scan_id,
             "current_scan_id": self.current_scan_id,
@@ -373,6 +377,7 @@ class ReportDiff:
         }
 
     def render_markdown(self) -> str:
+        """Render the diff as markdown for terminal and file output."""
         out = [
             f"# Changes since scan `{self.previous_scan_id}`",
             "",

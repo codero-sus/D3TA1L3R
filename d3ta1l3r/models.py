@@ -91,6 +91,7 @@ class Confidence(_StrEnum):
 
     @property
     def rank(self) -> int:
+        """Ordering rank for this confidence, so levels can be compared directly."""
         return {"low": 0, "medium": 1, "high": 2, "confirmed": 3}[self.value]
 
 
@@ -118,10 +119,15 @@ class ScanStatus(_StrEnum):
 
     @property
     def is_terminal_hit(self) -> bool:
+        """True only for a positive FOUND result."""
         return self is ScanStatus.FOUND
 
     @property
     def is_skip(self) -> bool:
+        """True when the source was skipped rather than run.
+
+        A skip is reported separately from a failure: skipping is a decision
+        we made, failing is something that happened to us."""
         return self.value.startswith("skipped")
 
 
@@ -176,6 +182,10 @@ class ScanTarget:
         return target
 
     def require_identifier(self) -> None:
+        """Fail unless at least one identifier was supplied.
+
+        Raises:
+            UsageError: if the target carries no identifier at all."""
         from .errors import UsageError
 
         if not any((self.username, self.email, self.name, self.domain)):
@@ -221,6 +231,7 @@ class ScanTarget:
         return " ".join(parts) or "<empty target>"
 
     def to_dict(self) -> dict[str, Any]:
+        """Serialise for the report."""
         return {
             "username": self.username,
             "email": self.email,
@@ -231,6 +242,8 @@ class ScanTarget:
 
     @classmethod
     def from_dict(cls, data: Mapping[str, Any]) -> ScanTarget:
+        """Rebuild from a report. Missing keys become None rather than raising, so a
+        report written by an older version still loads."""
         return cls(
             username=data.get("username"),
             email=data.get("email"),
@@ -272,6 +285,7 @@ class Finding:
             object.__setattr__(self, name, _text(getattr(self, name)))
 
     def to_dict(self) -> dict[str, Any]:
+        """Serialise for the report."""
         return {
             "source_id": self.source_id,
             "source_name": self.source_name,
@@ -292,6 +306,8 @@ class Finding:
 
     @classmethod
     def from_dict(cls, data: Mapping[str, Any]) -> Finding:
+        """Rebuild from a report. Missing keys become None rather than raising, so a
+        report written by an older version still loads."""
         return cls(
             source_id=data["source_id"],
             source_name=data["source_name"],
@@ -344,9 +360,14 @@ class SourceOutcome:
 
     @property
     def ok(self) -> bool:
+        """True when the source ran to completion.
+
+        Error, timeout and blocked are the three ways a source can fail to
+        answer, and none of them may be reported as a clean result."""
         return self.status not in (ScanStatus.ERROR, ScanStatus.TIMEOUT, ScanStatus.BLOCKED)
 
     def to_dict(self) -> dict[str, Any]:
+        """Serialise for the report."""
         return {
             "source_id": self.source_id,
             "source_name": self.source_name,
@@ -365,6 +386,8 @@ class SourceOutcome:
 
     @classmethod
     def from_dict(cls, data: Mapping[str, Any]) -> SourceOutcome:
+        """Rebuild from a report. Missing keys become None rather than raising, so a
+        report written by an older version still loads."""
         return cls(
             source_id=data["source_id"],
             source_name=data["source_name"],
@@ -397,6 +420,10 @@ class ScanStats:
 
     @classmethod
     def from_outcomes(cls, outcomes: Sequence[SourceOutcome], **extra: int) -> ScanStats:
+        """Tally an iterable of outcomes into stats.
+
+        A failed source is counted, not dropped: the denominator in a report
+        has to include the sources that could not answer."""
         hits = [o for o in outcomes if o.status is ScanStatus.FOUND]
         return cls(
             sources_total=len(outcomes),
@@ -409,6 +436,7 @@ class ScanStats:
         )
 
     def to_dict(self) -> dict[str, int]:
+        """Serialise for the report."""
         return {
             "sources_total": self.sources_total,
             "sources_ok": self.sources_ok,
@@ -422,6 +450,8 @@ class ScanStats:
 
     @classmethod
     def from_dict(cls, data: Mapping[str, Any]) -> ScanStats:
+        """Rebuild from a report. Missing keys become None rather than raising, so a
+        report written by an older version still loads."""
         return cls(**{k: int(v or 0) for k, v in data.items() if k in cls.__slots__})
 
 
@@ -442,11 +472,14 @@ class ScanEvent:
 
     @property
     def percent(self) -> float:
+        """Completion percentage, rounded to one decimal. Zero when nothing is
+        expected, so an empty scan cannot read as 100% done."""
         if not self.total:
             return 0.0
         return round(100.0 * self.completed / self.total, 1)
 
     def to_dict(self) -> dict[str, Any]:
+        """Serialise for the report."""
         return {
             "type": self.type,
             "scan_id": self.scan_id,
@@ -480,6 +513,7 @@ class ScanReport:
     # -- construction ----------------------------------------------------
     @classmethod
     def new(cls, target: ScanTarget, tool_version: str, **options: Any) -> ScanReport:
+        """Begin a report for ``target`` with a fresh scan id."""
         return cls(
             scan_id=uuid.uuid4().hex[:12],
             target=target,
@@ -490,6 +524,8 @@ class ScanReport:
 
     @property
     def duration_ms(self) -> int:
+        """Wall-clock duration. Uses the current time when the report is still open,
+        so progress output can show a running clock."""
         end = self.finished_at or utcnow()
         return int((end - self.started_at).total_seconds() * 1000)
 
@@ -504,20 +540,24 @@ class ScanReport:
         )
 
     def findings_by_category(self) -> dict[str, list[Finding]]:
+        """Findings grouped by category, categories sorted."""
         grouped: dict[str, list[Finding]] = {}
         for finding in self.findings:
             grouped.setdefault(finding.category, []).append(finding)
         return dict(sorted(grouped.items()))
 
     def outcome(self, source_id: str) -> SourceOutcome | None:
+        """The outcome for one source id, or None if that source did not run."""
         return next((o for o in self.outcomes if o.source_id == source_id), None)
 
     def refresh_stats(self, **extra: int) -> ScanStats:
+        """Recompute stats from the current outcomes and return them."""
         self.stats = ScanStats.from_outcomes(self.outcomes, **extra)
         return self.stats
 
     # -- serialisation ---------------------------------------------------
     def to_dict(self) -> dict[str, Any]:
+        """Serialise for the report."""
         return {
             "schema": "d3ta1l3r/report/1",
             "scan_id": self.scan_id,
@@ -535,10 +575,13 @@ class ScanReport:
         }
 
     def to_json(self, *, indent: int | None = 2) -> str:
+        """Serialise to a JSON string; round-trips through :meth:`from_json`."""
         return json.dumps(self.to_dict(), indent=indent, ensure_ascii=False, sort_keys=False)
 
     @classmethod
     def from_dict(cls, data: Mapping[str, Any]) -> ScanReport:
+        """Rebuild from a report. Missing keys become None rather than raising, so a
+        report written by an older version still loads."""
         return cls(
             scan_id=data["scan_id"],
             target=ScanTarget.from_dict(data.get("target") or {}),
@@ -554,4 +597,5 @@ class ScanReport:
 
     @classmethod
     def from_json(cls, raw: str | bytes) -> ScanReport:
+        """Parse a report from JSON."""
         return cls.from_dict(json.loads(raw))

@@ -415,6 +415,28 @@ class TestKnowledgeSources:
         assert "Atom feed" in (outcome.error or "")
         assert "maintenance" in (outcome.error or "")
 
+    async def test_arxiv_refuses_a_doctype_instead_of_expanding_entities(
+        self, fetcher_factory
+    ) -> None:
+        """A DOCTYPE is never legitimate in arXiv's Atom feed.
+
+        Modern expat caps entity amplification, but this project supports builds
+        whose bundled expat predates that limit, so the refusal is ours rather
+        than the parser's. Either way a hostile feed must not be expanded.
+        """
+        body = (
+            '<?xml version="1.0"?>'
+            '<!DOCTYPE feed [<!ENTITY lol0 "lol">'
+            '<!ENTITY lol1 "&lol0;&lol0;&lol0;&lol0;&lol0;&lol0;&lol0;&lol0;">]>'
+            '<feed xmlns="http://www.w3.org/2005/Atom">&lol1;</feed>'
+        )
+        fetcher, _ = await fetcher_factory({
+            "export.arxiv.org": (200, body, {"content-type": "application/atom+xml"})
+        })
+        outcome = await ArxivAuthor().bind(fetcher).execute(TARGET_NAME)
+        assert outcome.status is ScanStatus.ERROR
+        assert "DOCTYPE" in (outcome.error or "")
+
     async def test_pubmed_reports_a_count(self, fetcher_factory) -> None:
         fetcher, _ = await fetcher_factory({"eutils.ncbi.nlm.nih.gov": json_response(
             {"esearchresult": {"count": "7", "idlist": ["111", "222"]}}

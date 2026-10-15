@@ -44,6 +44,9 @@ class _Bucket:
         return max(waits) if waits else 0.0
 
     def consume(self) -> None:
+        """Spend one token and record the request time.
+
+        Never blocks; deciding when to wait is the caller's job."""
         self._refill()
         self.tokens = max(0.0, self.tokens - 1.0)
         self.last_request_at = time.monotonic()
@@ -92,6 +95,7 @@ class HostRateLimiter:
             waited += delay
 
     def snapshot(self) -> dict[str, float]:
+        """Current token count per host, for the dashboard."""
         return {host: round(b.tokens, 2) for host, b in self._buckets.items()}
 
 

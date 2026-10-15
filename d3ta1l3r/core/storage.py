@@ -45,6 +45,7 @@ class ScanMeta:
     markdown_path: Path | None = None
 
     def to_dict(self) -> dict[str, object]:
+        """Serialise this index row for the dashboard listing."""
         return {
             "scan_id": self.scan_id,
             "path": str(self.path),
@@ -69,15 +70,24 @@ class ScanStore:
 
     # -- paths -----------------------------------------------------------
     def stems(self) -> Iterator[tuple[Path, re.Match[str] | None]]:
+        """Yield ``(path, parsed stem)`` for every report.
+
+        The match is None for files written before the naming scheme existed;
+        callers fall back to a suffix match for those."""
         for path in sorted(self.directory.glob("*.json")):
             yield path, _STEM_RE.match(path.stem)
 
     def path_for(self, report: ScanReport, suffix: str = ".json") -> Path:
+        """Where a report of ``suffix`` is written: ``<stamp>-<slug>-<scan_id><suffix>``."""
         stamp = report.started_at.strftime("%Y%m%dT%H%M%SZ")
         slug = _slug(report.target.display()) or "scan"
         return self.directory / f"{stamp}-{slug}-{report.scan_id}{suffix}"
 
     def find(self, scan_id: str) -> Path | None:
+        """Locate a report by scan id, or None when no file carries it.
+
+        Prefers the parsed stem and falls back to a suffix match, so older
+        filenames still resolve."""
         for path, match in self.stems():
             if match and match.group("scan_id") == scan_id:
                 return path
@@ -89,6 +99,7 @@ class ScanStore:
     def save(
         self, report: ScanReport, *, formats: tuple[str, ...] = ("json", "markdown", "html")
     ) -> list[Path]:
+        """Write a report in each requested format and return the paths written."""
         written: list[Path] = []
         if "json" in formats:
             path = self.path_for(report, ".json")
@@ -106,6 +117,7 @@ class ScanStore:
 
     # -- read ------------------------------------------------------------
     def load(self, scan_id: str) -> ScanReport | None:
+        """Load a report by scan id, or None when no file carries that id."""
         path = self.find(scan_id)
         if path is None:
             return None
@@ -113,9 +125,14 @@ class ScanStore:
 
     @staticmethod
     def load_path(path: Path) -> ScanReport:
+        """Parse a report from a file on disk."""
         return ScanReport.from_json(path.read_text(encoding="utf-8"))
 
     def list(self, *, limit: int | None = None) -> list[ScanMeta]:
+        """Index rows for every readable report, newest first.
+
+        Unreadable files are skipped, so one corrupt report cannot hide all
+        the others from the listing."""
         metas: list[ScanMeta] = []
         for path, match in self.stems():
             try:

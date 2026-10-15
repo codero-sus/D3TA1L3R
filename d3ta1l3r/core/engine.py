@@ -74,6 +74,10 @@ class ScanEngine:
 
     # -- source selection -------------------------------------------------
     def available_sources(self) -> list[Any]:
+        """Every source this engine could run, including disabled ones.
+
+        Imported lazily so that listing sources does not pay for building the
+        whole catalogue."""
         if self._prototypes is None:
             from ..sources import all_sources
 
@@ -117,6 +121,11 @@ class ScanEngine:
     async def scan(
         self, target: ScanTarget, *, on_event: ProgressCallback | None = None
     ) -> ScanReport:
+        """Run every selected source against ``target`` and return the report.
+
+        Sources whose identifier kind was not supplied are skipped rather than
+        run: they have nothing to ask about, and running them would inflate the
+        source count with noise."""
         target.require_identifier()
         selected = self.selected_sources()
         # A source whose identifier kind was not supplied has nothing to ask about;
@@ -235,6 +244,7 @@ class ScanEngine:
         completed = 0
 
         async def worker(source: Any) -> SourceOutcome:
+            """Run one source, reporting start and finish around it."""
             async with semaphore:
                 await self._emit(
                     sink,

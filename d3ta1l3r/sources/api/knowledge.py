@@ -16,6 +16,7 @@ you.
 from __future__ import annotations
 
 import os
+import re
 import xml.etree.ElementTree as ET
 
 from ...models import Confidence, ScanStatus, ScanTarget, SourceKind, SourceOutcome
@@ -25,6 +26,11 @@ from .base import ApiSource, dig, first_present, name_matches, name_tokens, take
 __all__ = ["build"]
 
 _ATOM = "{http://www.w3.org/2005/Atom}"
+
+# A DOCTYPE can only appear before the root element, so scanning the head of
+# the document is enough and costs nothing on a large feed.
+_DOCTYPE_RE = re.compile(r"<!DOCTYPE", re.IGNORECASE)
+_DOCTYPE_SCAN_BYTES = 4096
 _OPENSEARCH = "{http://a9.com/-/spec/opensearch/1.1/}"
 
 _HOMONYM_NOTE = (
@@ -145,6 +151,19 @@ class ArxivAuthor(ApiSource):
         attempts: int,
         url: str,
     ) -> SourceOutcome:
+        if _DOCTYPE_RE.search(body[:_DOCTYPE_SCAN_BYTES]):
+            # arXiv's Atom feed has no DTD, so a DOCTYPE is never legitimate here.
+            # Rejecting it keeps entity-expansion ("billion laughs") off the table
+            # on Python builds whose bundled expat predates the amplification
+            # limit, without adding a dependency.
+            return self._outcome(
+                ScanStatus.ERROR,
+                started,
+                http_status=status,
+                query_url=url,
+                error="arXiv returned XML with a DOCTYPE; refused (entity expansion risk)",
+            )
+
         try:
             root = ET.fromstring(body)
         except ET.ParseError as exc:

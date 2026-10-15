@@ -137,9 +137,15 @@ class NotFoundVerdict:
 
     @property
     def certain(self) -> bool:
+        """True when the page positively states the account is absent.
+
+        Only a certain verdict may be reported as NOT_FOUND; anything weaker is
+        an UNKNOWN, because a missing profile and an unreadable page look
+        identical otherwise."""
         return self.kind == "absent"
 
     def to_dict(self) -> dict[str, Any]:
+        """Serialise the verdict for the report."""
         return {"kind": self.kind, "phrase": self.phrase, "evidence": self.evidence}
 
 

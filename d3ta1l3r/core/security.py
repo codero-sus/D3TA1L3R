@@ -174,6 +174,10 @@ def validate_domain(value: str) -> str:
 
 
 def validate_source_id(value: str) -> str:
+    """Normalise and validate a source id.
+
+        Raises:
+            UsageError: if the id is not a lowercase slug."""
     source_id = value.strip().lower()
     if not SOURCE_ID_RE.match(source_id):
         raise UsageError(f"invalid source id {value!r}")
@@ -181,6 +185,10 @@ def validate_source_id(value: str) -> str:
 
 
 def validate_category(value: str) -> str:
+    """Normalise and validate a category name.
+
+        Raises:
+            UsageError: if the category is not a lowercase slug."""
     category = value.strip().lower()
     if not SOURCE_ID_RE.match(category):
         raise UsageError(f"invalid category {value!r}")
@@ -340,6 +348,10 @@ def redact(value: str, *, keep: int = 2) -> str:
 
 
 def mask_email(email: str) -> str:
+    """Mask an email for display, keeping the domain.
+
+        The domain is kept because it is what makes the entry recognisable;
+        the local part is the part worth hiding."""
     local, _, domain = email.partition("@")
     if not domain:
         return "***"

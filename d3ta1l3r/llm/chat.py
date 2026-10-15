@@ -66,6 +66,8 @@ class Answer:
         return self.text
 
     def to_dict(self, *, strip_unknown: bool = False) -> dict[str, Any]:
+        """Serialise this turn. With ``strip_unknown``, sentences the citations could
+        not be traced to are removed rather than returned hedged."""
         return {
             "question": self.question,
             "answer": self.clean_text(strip_unknown=strip_unknown),
@@ -159,6 +161,8 @@ class ChatSession:
         self.history.clear()
 
     def describe(self) -> dict[str, Any]:
+        """What this session is using: backend, model, and how much scan data is in
+        scope. Shown in the dashboard so the user can see the blast radius."""
         info = self.backend.describe()
         info.update(
             {

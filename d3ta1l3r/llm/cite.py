@@ -36,9 +36,14 @@ class CitationReport:
 
     @property
     def ok(self) -> bool:
+        """True when the answer invented nothing.
+
+        Fails closed: any unresolved citation makes this False, so an
+        unverified answer can never be presented as clean."""
         return not self.unknown
 
     def to_dict(self) -> dict[str, object]:
+        """Serialise the citation audit for the report."""
         return {"cited": self.cited, "known": self.known, "unknown": self.unknown, "ok": self.ok}
 
 
