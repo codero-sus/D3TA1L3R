@@ -134,8 +134,11 @@ class RobotsPolicy:
             raise RobotsDeniedError(f"robots.txt disallows {url} for {self.user_agent_token}")
 
     def crawl_delay(self, url: str) -> float | None:
+        """The site's requested crawl delay for ``url``, or None when robots.txt said
+        nothing. Never guessed: an absent directive means no delay, not zero."""
         rules = self._cache.get(f"{urlsplit(url).scheme}://{urlsplit(url).netloc}")
         return rules.crawl_delay if rules else None
 
     def known_origins(self) -> list[str]:  # pragma: no cover - diagnostics
         return sorted(self._cache)
+        """Origins whose robots.txt has been fetched; diagnostics only."""

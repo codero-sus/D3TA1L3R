@@ -92,6 +92,9 @@ class DemoTransport(httpx.AsyncBaseTransport):
         self.calls: list[str] = []
 
     async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
+        """Answer a request from the local fixture instead of the network.
+
+        Records the URL so a test can assert on what was asked for."""
         url = str(request.url)
         self.calls.append(url)
         status, headers, body = self._respond(url)
@@ -103,6 +106,8 @@ class DemoTransport(httpx.AsyncBaseTransport):
 
     # -- routing ---------------------------------------------------------
     def _respond(self, url: str) -> tuple[int, dict, str]:
+        """Present so this satisfies the httpx transport interface; there is no
+        connection to release."""
         if url.endswith("/robots.txt"):
             return self._robots(url)
         handler = self._route(url)

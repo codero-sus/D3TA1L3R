@@ -36,9 +36,14 @@ class CacheEntry:
 
     @property
     def age(self) -> float:
+        """Seconds since this entry was fetched.
+
+        Clamped at zero, so a clock that stepped backwards between processes
+        cannot yield a negative age and make a stale entry look fresh."""
         return max(0.0, time.time() - self.fetched_at)
 
     def to_dict(self) -> dict[str, Any]:
+        """Serialise to the on-disk form; round-trips through :meth:`from_dict`."""
         return {
             "url": self.url,
             "status": self.status,
@@ -51,6 +56,10 @@ class CacheEntry:
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> CacheEntry:
+        """Rebuild an entry from its on-disk form.
+
+        A partial record is tolerated: the cache is a convenience, so a missing
+        key is a cache miss rather than a crash."""
         return cls(
             url=data["url"],
             status=int(data["status"]),
@@ -74,6 +83,11 @@ class ResponseCache:
 
     @staticmethod
     def key_for(url: str, *, method: str = "GET", accept: str = "") -> str:
+        """Cache key for a request.
+
+        Method and Accept header take part in the key because one URL can
+        legitimately return JSON or HTML, and serving one for the other would
+        be a wrong answer rather than merely a stale one."""
         material = f"{method.upper()} {url} {accept}".encode()
         return hashlib.sha256(material).hexdigest()[:32]
 
@@ -81,6 +95,10 @@ class ResponseCache:
         return self.directory / f"{key}.json"
 
     def get(self, key: str) -> CacheEntry | None:
+        """Return the cached entry, or None on a miss.
+
+        An unreadable or corrupt file counts as a miss. The cache must never be
+        the reason a scan fails."""
         path = self._path(key)
         if not path.is_file():
             self.misses += 1
@@ -98,6 +116,10 @@ class ResponseCache:
         return entry
 
     def set(self, key: str, entry: CacheEntry) -> None:
+        """Store an entry, atomically.
+
+        Responses over the size cap are dropped rather than cached, and a write
+        that fails is discarded rather than left half-written."""
         payload = json.dumps(entry.to_dict(), ensure_ascii=False)
         if len(payload.encode("utf-8")) > _MAX_ENTRY_BYTES:
             return  # oversized responses are not worth caching
@@ -110,6 +132,9 @@ class ResponseCache:
             tmp.unlink(missing_ok=True)
 
     def purge(self) -> int:
+        """Delete every cached entry and return how many were removed.
+
+        Best effort: a file that cannot be unlinked is skipped, not fatal."""
         removed = 0
         for path in self.directory.glob("*.json"):
             try:

@@ -154,6 +154,7 @@ BROWSER_PROFILES: dict[str, BrowserProfile] = {
 
 
 def profile_names() -> list[str]:
+    """The browser profile names a user can choose from, sorted."""
     return sorted(BROWSER_PROFILES)
 
 
