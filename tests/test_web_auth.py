@@ -904,3 +904,70 @@ class TestDashboardErrorSurfaces:
             sign_in(client)
             response = client.delete("/api/scans/does-not-exist")
             assert response.status_code < 500
+
+
+class TestSignInFailures:
+    """A failed sign-in must be a message on the page, never a 500."""
+
+    def test_a_wrong_passphrase_is_refused(self, tmp_path: Path) -> None:
+        client, _settings, _vault = build_app(tmp_path)
+        with client:
+            client.get("/login")
+            response = client.post(
+                "/login", data={"passphrase": "not the passphrase"},
+                follow_redirects=False,
+            )
+            assert response.status_code < 500, response.text[:200]
+
+    def test_a_wrong_passphrase_does_not_start_a_session(self, tmp_path: Path) -> None:
+        client, _settings, _vault = build_app(tmp_path)
+        with client:
+            client.get("/login")
+            client.post("/login", data={"passphrase": "wrong"})
+            # the guarded page must still send us back to the login form
+            response = client.get("/", follow_redirects=False)
+            assert response.status_code in {302, 303}, response.status_code
+
+    def test_the_login_page_is_reachable_before_signing_in(self, tmp_path: Path) -> None:
+        client, _settings, _vault = build_app(tmp_path)
+        with client:
+            response = client.get("/login")
+            assert response.status_code == 200
+            assert "passphrase" in response.text.lower()
+
+
+class TestBreachRunFailuresAreVisible:
+    """A breach run that throws must end in an error state, not look finished."""
+
+    def test_an_exception_becomes_an_error_state(self, tmp_path: Path, monkeypatch) -> None:
+        import d3ta1l3r.web.app as app_module
+
+        def explode(*_args, **_kwargs):
+            raise RuntimeError("the breach layer fell over")
+
+        monkeypatch.setattr(app_module, "run_breach_check", explode)
+        client, _settings, _vault = build_app(tmp_path, breach_config=BreachConfig())
+        with client:
+            sign_in(client)
+            client.post(
+                "/api/vault/entries",
+                json={"kind": "email", "value": "alice@example.com", "check_now": False},
+            )
+            client.post("/api/breach/check")
+            payload = wait_for_breach(client)
+            assert payload["status"] == "error", payload
+            assert payload["error"], "the operator needs to see why it failed"
+
+
+class TestCancellingAScan:
+    def test_deleting_a_running_scan_is_accepted(self, tmp_path: Path) -> None:
+        client, _settings, _vault = build_app(tmp_path, demo=True)
+        with client:
+            sign_in(client)
+            response = client.post(
+                "/api/scans", json={"username": "demo_user", "demo": True}
+            )
+            run_id = response.json()["run_id"]
+            # delete immediately: the run may still be in flight
+            deleted = client.delete(f"/api/scans/{run_id}")
+            assert deleted.status_code < 500, deleted.text[:200]
