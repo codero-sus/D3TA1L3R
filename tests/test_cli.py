@@ -6,6 +6,7 @@ import hashlib
 import io
 import json
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -360,6 +361,113 @@ class TestVaultCommand:
         junk.write_text("{}", encoding="utf-8")
         assert main(["vault", "init", "--from-scan", str(junk)]) == EXIT_USAGE
         assert not (tmp_path / "watchlist.vault").exists()
+
+
+class FakeCalibrationEngine:
+    """Stands in for ScanEngine so `calibrate` can be exercised without network.
+
+    Calibration deliberately has no --demo flag: its whole output is a
+    false-positive *rate*, and measuring that against a fixture would produce a
+    number that looks authoritative and means nothing. So the command is tested
+    by stubbing the engine, which exercises the real tallying and reporting code
+    while keeping the fake where everyone can see it.
+    """
+
+    def __init__(self, config: Any, sources: Any = None, on_event: Any = None) -> None:
+        self.sources = sources or []
+        self.calls: list[str] = []
+
+    async def scan(self, target: Any) -> Any:
+        self.calls.append(target.username or "")
+        from d3ta1l3r.models import ScanReport, SourceOutcome
+
+        # Bogus handles are reported absent (a well-behaved site); the one
+        # expected-present handle is reported found.
+        wanted = "found" if (target.username or "").startswith("real") else "not_found"
+        outcomes = [
+            SourceOutcome(
+                source_id=source.id,
+                source_name=source.name,
+                kind=source.kind,
+                category=source.category,
+                status=ScanStatus(wanted),
+                query_url=source.query_url(target.username or ""),
+            )
+            for source in self.sources
+        ]
+        report = ScanReport.new(target, "test")
+        report.outcomes = outcomes
+        report.refresh_stats()
+        return report
+
+
+class TestCalibrate:
+    """The calibrate command: tallying, summary and output, without the network."""
+
+    @pytest.fixture(autouse=True)
+    def _engine(self, monkeypatch):
+        monkeypatch.setattr("d3ta1l3r.cli.ScanEngine", FakeCalibrationEngine)
+        return FakeCalibrationEngine
+
+    def test_it_reports_no_false_positives_for_well_behaved_sites(
+        self, tmp_path, capsys
+    ) -> None:
+        assert main(["calibrate", "--sites", "github_user", "--absent-samples", "2",
+                     "-o", str(tmp_path)]) == EXIT_OK
+        out = capsys.readouterr().out
+        assert "No false positives observed" in out
+
+    def test_it_writes_a_summary_file(self, tmp_path, capsys) -> None:
+        main(["calibrate", "--sites", "github_user", "-o", str(tmp_path)])
+        written = sorted(tmp_path.glob("calibration-*.json"))
+        assert written, "calibration should leave a file behind"
+        payload = json.loads(written[-1].read_text(encoding="utf-8"))
+        assert "sites" in payload
+
+    def test_json_output_is_machine_readable(self, tmp_path, capsys) -> None:
+        assert main(["calibrate", "--sites", "github_user", "--json",
+                     "-o", str(tmp_path)]) == EXIT_OK
+        payload = json.loads(capsys.readouterr().out)
+        assert "sites" in payload
+
+    def test_an_unknown_site_is_a_usage_error(self, tmp_path, capsys) -> None:
+        assert main(["calibrate", "--sites", "definitely_not_a_site",
+                     "-o", str(tmp_path)]) == EXIT_USAGE
+        assert "no matching site ids" in capsys.readouterr().err
+
+    def test_expect_hit_needs_the_site_equals_handle_form(self, tmp_path, capsys) -> None:
+        assert main(["calibrate", "--expect-hit", "nonsense",
+                     "-o", str(tmp_path)]) == EXIT_USAGE
+        assert "SITE_ID=HANDLE" in capsys.readouterr().err
+
+    def test_it_probes_as_many_control_handles_as_asked(self, tmp_path, monkeypatch) -> None:
+        made: list[FakeCalibrationEngine] = []
+
+        def remember(config, sources=None, on_event=None):
+            engine = FakeCalibrationEngine(config, sources, on_event)
+            made.append(engine)
+            return engine
+
+        monkeypatch.setattr("d3ta1l3r.cli.ScanEngine", remember)
+        main(["calibrate", "--sites", "github_user", "--absent-samples", "3",
+              "-o", str(tmp_path)])
+        assert len(made[0].calls) == 3, made[0].calls
+
+    def test_control_handles_look_like_no_real_account(self, tmp_path, monkeypatch) -> None:
+        """A control handle that could collide with a real user would fake a hit."""
+        made: list[FakeCalibrationEngine] = []
+
+        def remember(config, sources=None, on_event=None):
+            engine = FakeCalibrationEngine(config, sources, on_event)
+            made.append(engine)
+            return engine
+
+        monkeypatch.setattr("d3ta1l3r.cli.ScanEngine", remember)
+        main(["calibrate", "--sites", "github_user", "--absent-samples", "2",
+              "-o", str(tmp_path)])
+        for handle in made[0].calls:
+            assert handle.startswith("zzq"), handle
+            assert len(handle) > 10, handle
 
 
 class TestBreachCommand:
