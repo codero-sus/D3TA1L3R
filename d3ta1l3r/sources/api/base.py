@@ -174,10 +174,19 @@ def name_matches(candidate: str | None, wanted: str, *, allow_partial: bool = Fa
     """True when a returned name plausibly *is* the name we asked about.
 
     Name-based sources must never present a same-name stranger as a match, so
-    this requires every token of the wanted name to appear in the candidate.
-    With ``allow_partial``, a single-token candidate counts only when the wanted
-    name is a single token too — that keeps "Madonna" from matching "Madonna
-    University" while still allowing mononyms.
+    every token of the wanted name has to appear in the candidate: searching
+    "Alice Doe" does not match "Bob Doe", and it does not match "Alice" either,
+    because half a name is not a person.
+
+    A *superset* candidate does match, though — searching "Madonna" does match a
+    record called "Madonna University". That is deliberate rather than an
+    oversight: these records are the ones worth showing a human, and the
+    knowledge sources pin every name finding to LOW confidence with a homonym
+    warning and list the matching works precisely so the user can rule it out.
+    Suppressing it here would hide a real record behind a guess about intent.
+
+    ``allow_partial`` additionally accepts a single-token overlap, for APIs that
+    return only a given name or only a surname.
     """
     if not candidate:
         return False
