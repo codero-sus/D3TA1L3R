@@ -7,6 +7,7 @@ source has to explain itself.
 
 from __future__ import annotations
 
+import ast
 import re
 import subprocess
 import sys
@@ -408,3 +409,63 @@ class TestNoSessionDetailsLeak:
                 f"{path.relative_to(ROOT)} contains an absolute home path; "
                 "use `~/` in sample output"
             )
+
+
+class TestDocstringsAreWellFormed:
+    """Guard the docstrings themselves, not just their presence.
+
+    Both of these defects were real: a docstring written *after* a `return`
+    (dead code that counted as documented), and three docstrings stacked on one
+    function. Neither is visible when you read the file, and a plain
+    "is there a docstring" check passes for both — the first because a later
+    string exists, the second because the first string is found.
+    """
+
+    @staticmethod
+    def _leading_strings(node) -> int:
+        count = 0
+        for stmt in node.body:
+            if (isinstance(stmt, ast.Expr) and isinstance(stmt.value, ast.Constant)
+                    and isinstance(stmt.value.value, str)):
+                count += 1
+            else:
+                break
+        return count
+
+    def _walk(self):
+        import pathlib as _p
+
+        for path in sorted(_p.Path("d3ta1l3r").rglob("*.py")):
+            tree = ast.parse(path.read_text(encoding="utf-8"))
+            for node in ast.walk(tree):
+                if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                    yield str(path), node
+
+    def test_no_function_has_stacked_docstrings(self) -> None:
+        offenders = [
+            f"{loc}:{node.lineno} {node.name} ({n} strings)"
+            for loc, node in self._walk()
+            if (n := self._leading_strings(node)) > 1
+        ]
+        assert not offenders, "stacked docstrings:\n" + "\n".join(offenders)
+
+    def test_every_public_function_is_documented(self) -> None:
+        missing = [
+            f"{loc}:{node.lineno} {node.name}"
+            for loc, node in self._walk()
+            if not node.name.startswith("_") and self._leading_strings(node) == 0
+        ]
+        assert not missing, "undocumented public functions:\n" + "\n".join(missing)
+
+    def test_no_docstring_sits_after_a_return(self) -> None:
+        """A docstring that is not the first statement is dead code."""
+        offenders = []
+        for loc, node in self._walk():
+            if self._leading_strings(node) > 0:
+                continue
+            for stmt in node.body:
+                if (isinstance(stmt, ast.Expr) and isinstance(stmt.value, ast.Constant)
+                        and isinstance(stmt.value.value, str)):
+                    offenders.append(f"{loc}:{node.lineno} {node.name}")
+                    break
+        assert not offenders, "docstring is not the first statement:\n" + "\n".join(offenders)
