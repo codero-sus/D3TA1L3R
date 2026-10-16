@@ -413,3 +413,129 @@ class TestEntryHelpers:
         assert vault.dirty is True
         vault.save()
         assert vault.dirty is False
+
+
+# ---------------------------------------------------------------------------
+# a damaged vault
+# ---------------------------------------------------------------------------
+class TestDamagedVaults:
+    """Corruption must produce a message that names the file and the problem.
+
+    A vault holds someone's real identifiers. If it will not open, the user
+    needs to know whether it is corrupt, truncated or simply not a vault — a
+    traceback from deep inside the KDF tells them none of that, and invites
+    them to try "fixing" it in a way that destroys what is left.
+    """
+
+    def test_a_file_that_is_not_json_is_rejected(self, tmp_path: Path) -> None:
+        path = tmp_path / "v.vault"
+        path.write_text("this is not json at all", encoding="utf-8")
+        with pytest.raises(VaultError, match=r"not a vault file"):
+            Vault.open(path, PASSPHRASE)
+
+    def test_json_that_is_not_an_object_is_rejected(self, tmp_path: Path) -> None:
+        path = tmp_path / "v.vault"
+        path.write_text("[1, 2, 3]", encoding="utf-8")
+        with pytest.raises(VaultError, match=r"not a vault file"):
+            Vault.open(path, PASSPHRASE)
+
+    def test_a_missing_header_is_rejected(self, tmp_path: Path) -> None:
+        path = tmp_path / "v.vault"
+        path.write_text(json.dumps({"payload": "x"}), encoding="utf-8")
+        with pytest.raises(VaultError, match=r"(?i)header"):
+            Vault.open(path, PASSPHRASE)
+
+    def test_a_damaged_salt_is_rejected(self, vault: Vault, tmp_path: Path) -> None:
+        path = tmp_path / "watchlist.vault"
+        raw = json.loads(_raw(path))
+        raw["kdf"]["salt"] = "not-base64!!"
+        path.write_text(json.dumps(raw), encoding="utf-8")
+        with pytest.raises(VaultError, match=r"(?i)damaged|salt"):
+            Vault.open(path, PASSPHRASE)
+
+    def test_a_missing_payload_is_rejected(self, vault: Vault, tmp_path: Path) -> None:
+        path = tmp_path / "watchlist.vault"
+        raw = json.loads(_raw(path))
+        raw.pop("payload", None)
+        path.write_text(json.dumps(raw), encoding="utf-8")
+        with pytest.raises(VaultError, match=r"(?i)no payload"):
+            Vault.open(path, PASSPHRASE)
+
+    def test_an_unknown_kdf_is_rejected(self, vault: Vault, tmp_path: Path) -> None:
+        path = tmp_path / "watchlist.vault"
+        raw = json.loads(_raw(path))
+        raw["kdf"]["name"] = "argon2id"
+        path.write_text(json.dumps(raw), encoding="utf-8")
+        with pytest.raises(VaultError, match=r"(?i)key derivation"):
+            Vault.open(path, PASSPHRASE)
+
+    def test_a_scrypt_cost_that_is_not_a_power_of_two_is_rejected(
+        self, vault: Vault, tmp_path: Path
+    ) -> None:
+        path = tmp_path / "watchlist.vault"
+        raw = json.loads(_raw(path))
+        raw["kdf"]["n"] = 1000
+        path.write_text(json.dumps(raw), encoding="utf-8")
+        with pytest.raises(VaultError, match=r"(?i)invalid scrypt cost"):
+            Vault.open(path, PASSPHRASE)
+
+    def test_a_scrypt_cost_that_would_exhaust_memory_is_reported_not_crashed(
+        self, vault: Vault, tmp_path: Path
+    ) -> None:
+        """A header asking for a terabyte must be a message, not an OOM kill."""
+        path = tmp_path / "watchlist.vault"
+        raw = json.loads(_raw(path))
+        raw["kdf"]["n"] = 1 << 40
+        path.write_text(json.dumps(raw), encoding="utf-8")
+        with pytest.raises(VaultError, match=r"(?i)memory|passphrase"):
+            Vault.open(path, PASSPHRASE)
+
+    def test_tampering_with_the_payload_is_detected(self, vault: Vault, tmp_path: Path) -> None:
+        """Authenticated encryption means an edited vault refuses to open.
+
+        It must not decrypt to something plausible; it must refuse. That is what
+        stops a tampered vault from quietly reporting a clean breach result.
+        """
+        path = tmp_path / "watchlist.vault"
+        raw = json.loads(_raw(path))
+        raw["payload"] = "not-an-object"
+        path.write_text(json.dumps(raw), encoding="utf-8")
+        with pytest.raises(VaultError, match=r"(?i)altered|passphrase|did not verify"):
+            Vault.open(path, PASSPHRASE)
+
+    def test_a_wrong_passphrase_is_not_reported_as_corruption(
+        self, vault: Vault, tmp_path: Path
+    ) -> None:
+        """The two failures must not be confused: one is retryable."""
+        path = tmp_path / "watchlist.vault"
+        with pytest.raises(VaultError) as excinfo:
+            Vault.open(path, "definitely the wrong passphrase")
+        assert "damaged" not in str(excinfo.value).lower()
+
+
+class TestNormaliseValue:
+    def test_a_non_string_value_is_a_usage_error(self) -> None:
+        with pytest.raises(UsageError, match=r"string"):
+            normalise_value(VaultKind.EMAIL, 123)
+
+    def test_an_empty_password_is_refused(self) -> None:
+        with pytest.raises(UsageError, match=r"(?i)empty"):
+            normalise_value(VaultKind.PASSWORD, "")
+
+    @pytest.mark.parametrize("kind", list(VaultKind))
+    def test_every_kind_rejects_a_non_string(self, kind: VaultKind) -> None:
+        with pytest.raises(UsageError):
+            normalise_value(kind, ["not", "a", "string"])
+
+
+class TestWatchlistFiltering:
+    def test_filtering_by_kind_narrows_the_list(self, vault: Vault) -> None:
+        vault.add(VaultKind.EMAIL, "alice@example.com")
+        vault.add(VaultKind.USERNAME, "alice")
+        assert len(vault.watchlist()) == 2
+        only_emails = vault.watchlist(VaultKind.EMAIL)
+        assert len(only_emails) == 1
+        assert only_emails[0].kind is VaultKind.EMAIL
+
+    def test_removing_an_unknown_id_is_not_an_error(self, vault: Vault) -> None:
+        assert vault.remove("no-such-entry") is False
