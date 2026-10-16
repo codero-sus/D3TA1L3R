@@ -156,10 +156,11 @@ class LLMBackend:
 
     # -- generation ------------------------------------------------------
     def generate(self, messages: Sequence[dict[str, str]], *, context_text: str = "") -> str:
-        """The model this backend answers with, for display and for reports."""
-        """``(usable, reason)`` — the reason is shown to the user, so a backend that
-        cannot run is named instead of silently producing nothing."""
-        """Produce an answer. ``context_text`` is used by the fallback."""
+        """Produce an answer. ``context_text`` is used by the fallback.
+
+        Raises:
+            NotImplementedError: the base backend has no model; use a subclass.
+        """
         raise NotImplementedError
 
     def describe(self) -> dict[str, Any]:
