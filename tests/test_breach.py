@@ -714,6 +714,79 @@ class TestSearchTerms:
         assert "Alice Doe" not in synthetic.masked
 
 
+class TestExhaustiveRuns:
+    """`--all`: every source/entry pair gets a row, including the ones that cannot be.
+
+    The honest version of "check everything" is not pretending every source can
+    cover every identifier — it is refusing to leave an uncovered pair
+    unmentioned. A normal run drops those pairs because they would be noise; an
+    exhaustive run writes them down as UNSUPPORTED, which is a gap and not a
+    pass.
+    """
+
+    async def test_a_normal_run_omits_pairs_that_cannot_be_asked(self) -> None:
+        report = await run_breach_check(
+            [entry(VaultKind.EMAIL, "alice@example.com")],
+            scan_config=make_config(),
+            breach_config=breach_config(demo=True),
+        )
+        # the password source has nothing to say about an email, so it is silent
+        assert all(check.source_id != "pwned_passwords" for check in report.checks)
+
+    async def test_an_exhaustive_run_records_them_instead(self) -> None:
+        report = await run_breach_check(
+            [entry(VaultKind.EMAIL, "alice@example.com")],
+            scan_config=make_config(),
+            breach_config=breach_config(demo=True, exhaustive=True),
+        )
+        unsupported = [c for c in report.checks if c.status is BreachStatus.UNSUPPORTED]
+        assert unsupported, "an exhaustive run owes a row for every pair"
+        assert any(c.source_id == "pwned_passwords" for c in unsupported)
+
+    async def test_the_row_says_what_the_source_does_cover(self) -> None:
+        """Otherwise "no result" reads the same as "nothing found"."""
+        report = await run_breach_check(
+            [entry(VaultKind.EMAIL, "alice@example.com")],
+            scan_config=make_config(),
+            breach_config=breach_config(demo=True, exhaustive=True),
+        )
+        row = next(c for c in report.checks if c.source_id == "pwned_passwords")
+        assert "cannot check" in row.detail
+        assert "password" in row.detail.lower(), row.detail
+
+    async def test_exhaustive_never_turns_a_gap_into_a_pass(self) -> None:
+        """The whole point: more rows must not mean a cleaner-looking report."""
+        report = await run_breach_check(
+            [entry(VaultKind.EMAIL, "alice@example.com")],
+            scan_config=make_config(),
+            breach_config=breach_config(demo=True, exhaustive=True),
+        )
+        row = next(c for c in report.checks if c.source_id == "pwned_passwords")
+        assert row.status is not BreachStatus.CLEAN
+        assert row.status is BreachStatus.UNSUPPORTED
+
+    async def test_exhaustive_does_not_change_the_verdicts(self) -> None:
+        """Exhaustive adds rows; it must not move any existing answer."""
+        entries = [entry(VaultKind.EMAIL, "alice@example.com")]
+        plain = await run_breach_check(
+            entries, scan_config=make_config(), breach_config=breach_config(demo=True)
+        )
+        full = await run_breach_check(
+            entries,
+            scan_config=make_config(),
+            breach_config=breach_config(demo=True, exhaustive=True),
+        )
+        key = lambda c: (c.source_id, c.entry_id)  # noqa: E731
+        plain_by_key = {key(c): c.status for c in plain.checks}
+        for check in full.checks:
+            if key(check) in plain_by_key:
+                assert plain_by_key[key(check)] is check.status
+        assert len(full.checks) > len(plain.checks)
+
+    def test_the_config_default_is_off(self) -> None:
+        assert BreachConfig().exhaustive is False
+
+
 class TestAutomaticRunsStayLocal:
     """The rule an automatic breach run has to obey."""
 

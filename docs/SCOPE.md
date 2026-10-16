@@ -343,6 +343,21 @@ the opposite of what this does:
   not check this", and a dump that was never searched would look like a clean
   result.
 
+### `--all`: exhaustive, and honest about it
+
+An exhaustive run asks every source about every entry and records a row for
+every pair, including the pairs a source could never have answered for.
+
+The distinction matters more than the flag. "Check every breach source" could
+mean pretending each source covers every identifier, which would turn uncovered
+combinations into clean results — the exact failure this document keeps
+guarding against. So an exhaustive run does the opposite:
+
+- an unsupported pair is recorded as `unsupported`, **never** as `clean`;
+- the row names what the source does cover, so "no result" is distinguishable
+  from "never tried";
+- verdicts are unchanged — exhaustive adds rows, it does not move an answer.
+
 ### Automatic runs are local-only
 
 The dashboard re-checks the watchlist **on sign-in** and **after every scan**,

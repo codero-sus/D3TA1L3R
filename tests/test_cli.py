@@ -455,6 +455,26 @@ class TestBreachCommand:
         printed = capsys.readouterr().err
         assert "2 corpus file(s)" in printed, printed
 
+    def test_all_records_the_pairs_that_cannot_be_checked(self, tmp_path, capsys) -> None:
+        """`--all` adds rows for uncovered pairs; it must not hide a gap."""
+        assert main(["vault", "add", "--kind", "email",
+                     "alice@example.com", "--no-check"]) == EXIT_OK
+        capsys.readouterr()
+
+        def latest() -> dict:
+            written = sorted((tmp_path / "breach").glob("*.json"))
+            return json.loads(written[-1].read_text(encoding="utf-8"))
+
+        main(["breach", "run", "--demo", "-o", str(tmp_path)])
+        plain = latest()
+        main(["breach", "run", "--demo", "--all", "-o", str(tmp_path)])
+        full = latest()
+
+        assert len(full["checks"]) > len(plain["checks"])
+        unsupported = [c for c in full["checks"] if c["status"] == "unsupported"]
+        assert unsupported, "an exhaustive run owes a row for every pair"
+        assert "cannot check" in unsupported[0]["detail"]
+
     def test_a_search_term_is_checked_without_being_stored(self, tmp_path, capsys) -> None:
         """A private string can be searched without becoming a vault entry."""
         # "account:password" is the shape every combo list uses, and the

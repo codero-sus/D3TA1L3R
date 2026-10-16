@@ -915,6 +915,7 @@
     const dirs = $("#corpus-dir");
     const terms = $("#search-terms");
     const recursive = $("#corpus-recursive");
+    const exhaustive = $("#corpus-exhaustive");
 
     // setStatus() is hard-wired to the scan form; this panel has its own slot.
     const show = (node, message, isError) => {
@@ -940,6 +941,7 @@
             corpora: split(dirs && dirs.value),
             search_terms: split(terms && terms.value),
             recursive: !!(recursive && recursive.checked),
+            exhaustive: !!(exhaustive && exhaustive.checked),
           }),
         });
         const body = await response.json();

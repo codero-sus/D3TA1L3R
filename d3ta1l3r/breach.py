@@ -193,6 +193,19 @@ class BreachConfig:
     Manual runs are unaffected and use every configured source.
     """
 
+    exhaustive: bool = False
+    """Ask every source about every entry, and record what could not be asked.
+
+    A normal run omits pairs a source cannot answer for — a password source has
+    nothing to say about an email — because those rows would be noise. An
+    exhaustive run owes the operator a row for *every* source/entry pair, so
+    "this combination was never covered" is written down rather than inferred
+    from a missing row.
+
+    It never invents coverage: an unsupported pair is reported UNSUPPORTED,
+    which is a gap and not a pass.
+    """
+
     @classmethod
     def from_env(cls, **overrides: Any) -> BreachConfig:
         key = overrides.pop("hibp_api_key", None)
@@ -276,6 +289,23 @@ class BreachSource:
 
     async def check_one(self, entry: VaultEntry, config: BreachConfig) -> BreachCheck:
         raise NotImplementedError
+
+    def unsupported_check(self, entry: VaultEntry) -> BreachCheck:
+        """The row for a pair this source cannot answer about.
+
+        Written only by an exhaustive run, where the point is that no
+        source/entry combination goes unmentioned. Naming what the source *does*
+        cover is what makes the row useful: it turns "no result" into "this
+        source was never able to look", which is the difference between a gap
+        and a pass.
+        """
+        covers = ", ".join(sorted(kind.label for kind in self.kinds)) or "no kinds"
+        return self._result(
+            entry,
+            BreachStatus.UNSUPPORTED,
+            detail=f"{self.name} cannot check a {entry.kind.label}; it covers {covers}",
+            evidence=f"this source never saw this {entry.kind.label}",
+        )
 
     # -- helpers ---------------------------------------------------------
     def _result(
@@ -705,6 +735,22 @@ async def run_breach_check(
             )
             for source in bound:
                 if not source.supports(entry):
+                    if config.exhaustive:
+                        # Record the pair instead of dropping it, so coverage is
+                        # visible rather than inferred from an absent row.
+                        check = source.unsupported_check(entry)
+                        report.checks.append(check)
+                        _emit(
+                            on_event,
+                            {
+                                "type": "source_finished",
+                                "message": f"{source.name}: {check.status.value}",
+                                "source_id": source.id,
+                                "source_name": source.name,
+                                "status": check.status.value,
+                                "detail": check.detail,
+                            },
+                        )
                     continue
                 _emit(
                     on_event,

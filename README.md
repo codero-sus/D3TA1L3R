@@ -283,6 +283,23 @@ indexed by SHA-1/256/512 so a corpus of hashes works as well as a corpus of
 addresses. Files are streamed rather than loaded, so a multi-gigabyte dump costs
 memory proportional to your watchlist, not to the dump.
 
+### Checking everything: `--all`
+
+By default a run only asks sources that can answer for that kind of identifier —
+a password source has nothing to say about an email, and printing a row for it
+would just be noise. `--all` asks anyway and, more importantly, **writes a row
+for every source/entry pair**, including the ones that could not be checked:
+
+```bash
+d3ta1l3r breach run --all
+```
+
+Those rows come back `unsupported`, and the detail names what the source *does*
+cover. That is the difference between a gap and a pass: without the row, "no
+result for this pair" and "this pair was never tried" look identical, and a
+report quietly reads cleaner than it is. `--all` never invents coverage — an
+unsupported pair stays a gap, it just stops being invisible.
+
 **Automatic runs stay on the machine.** The dashboard re-checks the watchlist on
 sign-in and after every scan, and those automatic runs are restricted to *local*
 dump searches. A check that fires on its own should never be the thing that

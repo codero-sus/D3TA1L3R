@@ -271,6 +271,10 @@ def build_parser() -> argparse.ArgumentParser:
                                     "address, an old handle (repeatable, never stored)")
     breach_common.add_argument("--no-auto", dest="auto", action="store_false", default=True,
                                help="do not run the automatic local dump search")
+    breach_common.add_argument("--all", dest="exhaustive", action="store_true",
+                               help="exhaustive: ask every source about every entry and "
+                                    "record the pairs that cannot be checked, so nothing "
+                                    "is left unmentioned")
     breach_common.add_argument("--hibp-key-file", default=None,
                                help="file holding your HIBP API key (the key is never an argument)")
     breach_common.add_argument("--demo", action="store_true",
@@ -1290,6 +1294,8 @@ def _breach_config(args: argparse.Namespace) -> BreachConfig:
     terms = tuple(str(term) for term in (getattr(args, "term", None) or ()) if str(term).strip())
     if terms:
         overrides["search_terms"] = terms
+    if getattr(args, "exhaustive", False):
+        overrides["exhaustive"] = True
     demo = getattr(args, "demo", False)
     return BreachConfig.from_env(demo=bool(demo), **overrides)
 

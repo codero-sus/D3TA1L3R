@@ -771,6 +771,16 @@ class TestTheLeakSearchPanel:
             assert body["persisted"] is False
             assert "never written to disk" in body["note"]
 
+    def test_exhaustive_can_be_turned_on_from_the_panel(self, tmp_path: Path) -> None:
+        client, settings, _vault = build_app(tmp_path, demo=False)
+        with client:
+            sign_in(client)
+            body = client.post(
+                "/api/breach/config", json={"exhaustive": True}
+            ).json()
+            assert body["exhaustive"] is True
+            assert settings.breach_config.exhaustive is True
+
     def test_it_needs_a_session(self, tmp_path: Path) -> None:
         client, _settings, _vault = build_app(tmp_path, demo=False)
         with client:
