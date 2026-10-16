@@ -60,13 +60,19 @@ class HttpResponse:
 
     @property
     def ok(self) -> bool:
+        """True for a 2xx or 3xx response.
+
+        Redirects count as success because the fetcher already followed them;
+        a redirect loop is reported separately."""
         return 200 <= self.status < 400
 
     @property
     def content_length(self) -> int:
+        """Length of the decoded body actually held, after any size cap."""
         return len(self.text)
 
     def header(self, name: str, default: str | None = None) -> str | None:
+        """One response header, case-insensitively, or ``default``."""
         return self.headers.get(name.lower(), default)
 
     def json(self) -> Any:
@@ -119,6 +125,7 @@ class Fetcher:
         await self.close()
 
     async def start(self) -> None:
+        """Open the underlying client. Safe to call more than once."""
         if self._client is not None:
             return
         async with self._client_lock:
@@ -142,12 +149,17 @@ class Fetcher:
             )
 
     async def close(self) -> None:
+        """Close the client and release its connections."""
         client, self._client = self._client, None
         if client is not None:
             await client.aclose()
 
     @property
     def client(self) -> httpx.AsyncClient:
+        """The live client.
+
+        Raises:
+            RuntimeError: if :meth:`start` was never awaited."""
         if self._client is None:  # pragma: no cover - programming error
             raise RuntimeError("Fetcher.start() was never awaited")
         return self._client

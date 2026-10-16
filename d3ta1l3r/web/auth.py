@@ -80,6 +80,10 @@ class AuthSettings:
     trusted_origins: tuple[str, ...] = ()
 
     def validate(self) -> None:
+        """Reject settings that would weaken the session.
+
+        Raises:
+            UsageError: if the values are not safe."""
         if self.session_ttl_seconds < 60:
             raise UsageError("a session must last at least a minute")
         if self.max_attempts < 1:
@@ -124,6 +128,7 @@ class SessionManager:
 
     # -- verifying -------------------------------------------------------
     def verify(self, token: str | None) -> bool:
+        """True while this token still names a live session."""
         if not token:
             return False
         try:
@@ -164,6 +169,7 @@ class SessionManager:
         return self._sessions.pop(sid, None) is not None
 
     def prune(self) -> int:
+        """Drop expired sessions and return how many went."""
         now = self._clock()
         stale = [sid for sid, expiry in self._sessions.items() if expiry <= now]
         for sid in stale:
@@ -172,6 +178,7 @@ class SessionManager:
 
     @property
     def active(self) -> int:
+        """How many sessions are live."""
         return len(self._sessions)
 
 
@@ -216,10 +223,12 @@ class LoginThrottle:
         return 0.0
 
     def record_success(self, key: str) -> None:
+        """Clear the failure count for this key after a good sign-in."""
         self._failures.pop(key, None)
         self._locked_until.pop(key, None)
 
     def prune(self) -> None:
+        """Drop expired sessions and return how many went."""
         now = self._clock()
         for key in list(self._failed_keys_older_than(now)):
             del self._failures[key]
@@ -323,6 +332,7 @@ def set_session_cookie(response: Any, token: str, settings: AuthSettings) -> Non
 
 
 def clear_session_cookie(response: Any, settings: AuthSettings) -> None:
+    """Drop the session cookie and make sure the response is not cached."""
     response.delete_cookie(settings.session_cookie, path="/")
     response.headers["Cache-Control"] = "no-store"
 

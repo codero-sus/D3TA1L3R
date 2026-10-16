@@ -60,6 +60,10 @@ class RateLimitConfig:
     """Respect ``Retry-After`` on 429/503 responses."""
 
     def validate(self) -> None:
+        """Reject impossible settings before they reach the network layer.
+
+        Raises:
+            ConfigError: if the values are not usable."""
         if self.per_host_rps <= 0:
             raise ConfigError("rate.per_host_rps must be > 0")
         if self.per_host_burst < 1:
@@ -156,6 +160,10 @@ class ScanConfig:
         self.validate()
 
     def validate(self) -> None:
+        """Reject impossible settings before they reach the network layer.
+
+        Raises:
+            ConfigError: if the values are not usable."""
         if self.timeout <= 0 or self.connect_timeout <= 0:
             raise ConfigError("timeouts must be > 0")
         if self.connect_timeout > self.timeout * 4:

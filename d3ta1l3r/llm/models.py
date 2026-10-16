@@ -89,6 +89,7 @@ class ModelSpec:
 
     @property
     def url(self) -> str:
+        """Where these weights are fetched from."""
         return f"{HF_HOST}/{self.repo}/resolve/{self.revision}/{self.filename}"
 
     @property
@@ -98,13 +99,16 @@ class ModelSpec:
 
     @property
     def is_powerful(self) -> bool:
+        """True for the models tagged as the heavier option."""
         return "powerful" in self.tags
 
     @property
     def fits_4gb(self) -> bool:
+        """True when the model's estimated working set is under 4 GiB."""
         return self.ram_mb <= 4096
 
     def to_dict(self) -> dict[str, Any]:
+        """Serialise for the catalogue listing."""
         payload = asdict(self)
         payload.update(
             {
@@ -303,14 +307,17 @@ def default_models_dir() -> Path:
 
 
 def custom_catalog_path(models_dir: Path | str | None = None) -> Path:
+    """Where user-added model definitions are kept."""
     return Path(models_dir or default_models_dir()) / "catalog.json"
 
 
 def model_path(spec: ModelSpec, models_dir: Path | str | None = None) -> Path:
+    """Where a model's weights are stored, or would be stored."""
     return Path(models_dir or default_models_dir()) / f"{spec.id}.gguf"
 
 
 def format_bytes(count: int) -> str:
+    """Human-readable byte count."""
     size = float(count)
     for unit in ("B", "KiB", "MiB", "GiB", "TiB"):
         if size < 1024 or unit == "TiB":
@@ -320,10 +327,12 @@ def format_bytes(count: int) -> str:
 
 
 def format_mb(mb: int) -> str:
+    """Human-readable size in MB, switching to GB past a gibibyte."""
     return f"{mb / 1024:.1f} GB" if mb >= 1024 else f"{mb} MB"
 
 
 def total_size_mb(specs: Iterable[ModelSpec]) -> int:
+    """Combined download size of several models."""
     return sum(spec.size_mb for spec in specs)
 
 
@@ -413,6 +422,7 @@ def save_custom_model(spec: ModelSpec, models_dir: Path | str | None = None) -> 
 
 
 def remove_custom_model(model_id: str, models_dir: Path | str | None = None) -> bool:
+    """Forget a user-added model. Returns False when the id was not known."""
     directory = Path(models_dir or default_models_dir())
     existing = load_custom_models(directory)
     remaining = [item for item in existing if item.id != model_id]

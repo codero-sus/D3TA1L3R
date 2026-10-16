@@ -235,17 +235,21 @@ class JsonResult:
 
     @property
     def status(self) -> int:
+        """HTTP status of the response."""
         return int(self.response.status)
 
     @property
     def ok(self) -> bool:
+        """True for a 2xx response."""
         return 200 <= self.status < 300
 
     @property
     def attempts(self) -> int:
+        """How many tries the request took, including retries."""
         return int(getattr(self.response, "attempts", 1))
 
     def describe(self) -> str:
+        """One-line summary for logs: status, URL and any parse error."""
         bits = [f"HTTP {self.status}"]
         if self.request_url:
             bits.append(self.request_url)
@@ -419,6 +423,7 @@ class ApiSource(BaseSource):
         account_created_at: str | None = None,
         extra: dict[str, object] | None = None,
     ) -> Finding:
+        """Record a finding, or the reason none was recorded."""
         return self.finding(
             identifier=identifier,
             url=url,
@@ -457,4 +462,5 @@ def elapsed_wall_clock(started: float) -> int:
 
 # Kept importable for sources that want the target's own display label in a title.
 def target_label(target: ScanTarget) -> str:
+    """How the target is described in this source's output."""
     return target.display()

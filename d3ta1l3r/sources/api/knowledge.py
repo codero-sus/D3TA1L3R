@@ -55,9 +55,18 @@ class OpenAlexAuthor(ApiSource):
     )
 
     def query_url(self, identifier: str) -> str:
+        """The URL this source asks about ``identifier``.
+
+        Built with :meth:`quote`, so an identifier containing reserved
+        characters cannot change the shape of the request."""
         return f"https://api.openalex.org/authors?filter=display_name.search:{identifier}&per-page=5"
 
     async def run(self, identifier: str, target: ScanTarget) -> SourceOutcome:
+        """Look ``identifier`` up and report what was found.
+
+        A transport failure or an unparseable body is reported as an error,
+        never as absence: this source cannot tell "no such account" from
+        "could not ask", so it refuses to guess."""
         started = self.now()
         result = await self.fetch_json(
             "https://api.openalex.org/authors",
@@ -122,9 +131,18 @@ class ArxivAuthor(ApiSource):
     )
 
     def query_url(self, identifier: str) -> str:
+        """The URL this source asks about ``identifier``.
+
+        Built with :meth:`quote`, so an identifier containing reserved
+        characters cannot change the shape of the request."""
         return f'https://export.arxiv.org/api/query?search_query=au:"{identifier}"&max_results=5'
 
     async def run(self, identifier: str, target: ScanTarget) -> SourceOutcome:
+        """Look ``identifier`` up and report what was found.
+
+        A transport failure or an unparseable body is reported as an error,
+        never as absence: this source cannot tell "no such account" from
+        "could not ask", so it refuses to guess."""
         started = self.now()
         query = f'au:"{identifier}"'
         result = await self.fetch_json(
@@ -243,9 +261,18 @@ class PubMedAuthor(ApiSource):
     )
 
     def query_url(self, identifier: str) -> str:
+        """The URL this source asks about ``identifier``.
+
+        Built with :meth:`quote`, so an identifier containing reserved
+        characters cannot change the shape of the request."""
         return "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esearch.fcgi"
 
     async def run(self, identifier: str, target: ScanTarget) -> SourceOutcome:
+        """Look ``identifier`` up and report what was found.
+
+        A transport failure or an unparseable body is reported as an error,
+        never as absence: this source cannot tell "no such account" from
+        "could not ask", so it refuses to guess."""
         started = self.now()
         result = await self.fetch_json(
             self.query_url(identifier),
@@ -298,6 +325,10 @@ class OrcidAuthor(ApiSource):
     )
 
     def query_url(self, identifier: str) -> str:
+        """The URL this source asks about ``identifier``.
+
+        Built with :meth:`quote`, so an identifier containing reserved
+        characters cannot change the shape of the request."""
         return f"https://pub.orcid.org/v3.0/expanded-search/?q={self.quote(self._query(identifier))}"
 
     @staticmethod
@@ -310,6 +341,11 @@ class OrcidAuthor(ApiSource):
         return f"given-names:{tokens[0]} AND family-name:{' '.join(tokens[1:])}"
 
     async def run(self, identifier: str, target: ScanTarget) -> SourceOutcome:
+        """Look ``identifier`` up and report what was found.
+
+        A transport failure or an unparseable body is reported as an error,
+        never as absence: this source cannot tell "no such account" from
+        "could not ask", so it refuses to guess."""
         started = self.now()
         result = await self.fetch_json(
             "https://pub.orcid.org/v3.0/expanded-search/",
@@ -379,12 +415,21 @@ class WikipediaSearch(ApiSource):
     )
 
     def query_url(self, identifier: str) -> str:
+        """The URL this source asks about ``identifier``.
+
+        Built with :meth:`quote`, so an identifier containing reserved
+        characters cannot change the shape of the request."""
         return (
             "https://en.wikipedia.org/w/api.php?action=query&list=search&format=json"
             f"&srlimit=5&srsearch={self.quote(identifier)}"
         )
 
     async def run(self, identifier: str, target: ScanTarget) -> SourceOutcome:
+        """Look ``identifier`` up and report what was found.
+
+        A transport failure or an unparseable body is reported as an error,
+        never as absence: this source cannot tell "no such account" from
+        "could not ask", so it refuses to guess."""
         started = self.now()
         result = await self.fetch_json(
             "https://en.wikipedia.org/w/api.php",
@@ -427,4 +472,5 @@ class WikipediaSearch(ApiSource):
 
 
 def build() -> list[ApiSource]:
+    """The sources this module provides."""
     return [OpenAlexAuthor(), ArxivAuthor(), PubMedAuthor(), OrcidAuthor(), WikipediaSearch()]

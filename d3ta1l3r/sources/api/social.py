@@ -56,12 +56,21 @@ class BlueskyHandle(ApiSource):
     )
 
     def query_url(self, identifier: str) -> str:
+        """The URL this source asks about ``identifier``.
+
+        Built with :meth:`quote`, so an identifier containing reserved
+        characters cannot change the shape of the request."""
         return (
             "https://public.api.bsky.app/xrpc/app.bsky.actor.getProfile?"
             f"actor={self.quote(identifier)}"
         )
 
     async def run(self, identifier: str, target: ScanTarget) -> SourceOutcome:
+        """Look ``identifier`` up and report what was found.
+
+        A transport failure or an unparseable body is reported as an error,
+        never as absence: this source cannot tell "no such account" from
+        "could not ask", so it refuses to guess."""
         started = self.now()
 
         if "." not in identifier:
@@ -191,12 +200,21 @@ class BlueskyNameSearch(ApiSource):
     )
 
     def query_url(self, identifier: str) -> str:
+        """The URL this source asks about ``identifier``.
+
+        Built with :meth:`quote`, so an identifier containing reserved
+        characters cannot change the shape of the request."""
         return (
             "https://public.api.bsky.app/xrpc/app.bsky.actor.searchActors?"
             f"q={self.quote(identifier)}&limit=25"
         )
 
     async def run(self, identifier: str, target: ScanTarget) -> SourceOutcome:
+        """Look ``identifier`` up and report what was found.
+
+        A transport failure or an unparseable body is reported as an error,
+        never as absence: this source cannot tell "no such account" from
+        "could not ask", so it refuses to guess."""
         started = self.now()
         result = await self.fetch_json(self.query_url(identifier))
         if not result.ok or result.payload is None:
@@ -258,12 +276,21 @@ class MastodonAccount(ApiSource):
     )
 
     def query_url(self, identifier: str) -> str:
+        """The URL this source asks about ``identifier``.
+
+        Built with :meth:`quote`, so an identifier containing reserved
+        characters cannot change the shape of the request."""
         return (
             "https://mastodon.social/api/v1/accounts/lookup?"
             f"acct={self.quote(identifier)}"
         )
 
     async def run(self, identifier: str, target: ScanTarget) -> SourceOutcome:
+        """Look ``identifier`` up and report what was found.
+
+        A transport failure or an unparseable body is reported as an error,
+        never as absence: this source cannot tell "no such account" from
+        "could not ask", so it refuses to guess."""
         started = self.now()
         result = await self.fetch_json(self.query_url(identifier))
         if not result.ok or result.payload is None:
@@ -328,12 +355,21 @@ class HackerNewsAuthor(ApiSource):
     )
 
     def query_url(self, identifier: str) -> str:
+        """The URL this source asks about ``identifier``.
+
+        Built with :meth:`quote`, so an identifier containing reserved
+        characters cannot change the shape of the request."""
         return (
             "https://hn.algolia.com/api/v1/search?"
             f"tags=author_{self.quote(identifier)}&hitsPerPage=10"
         )
 
     async def run(self, identifier: str, target: ScanTarget) -> SourceOutcome:
+        """Look ``identifier`` up and report what was found.
+
+        A transport failure or an unparseable body is reported as an error,
+        never as absence: this source cannot tell "no such account" from
+        "could not ask", so it refuses to guess."""
         started = self.now()
         result = await self.fetch_json(self.query_url(identifier))
         if not result.ok or result.payload is None:
@@ -391,9 +427,18 @@ class ChessComUser(ApiSource):
     )
 
     def query_url(self, identifier: str) -> str:
+        """The URL this source asks about ``identifier``.
+
+        Built with :meth:`quote`, so an identifier containing reserved
+        characters cannot change the shape of the request."""
         return f"https://api.chess.com/pub/player/{self.quote(identifier.lower())}"
 
     async def run(self, identifier: str, target: ScanTarget) -> SourceOutcome:
+        """Look ``identifier`` up and report what was found.
+
+        A transport failure or an unparseable body is reported as an error,
+        never as absence: this source cannot tell "no such account" from
+        "could not ask", so it refuses to guess."""
         started = self.now()
         result = await self.fetch_json(self.query_url(identifier))
         if not result.ok or result.payload is None:
@@ -453,9 +498,18 @@ class LichessUser(ApiSource):
     )
 
     def query_url(self, identifier: str) -> str:
+        """The URL this source asks about ``identifier``.
+
+        Built with :meth:`quote`, so an identifier containing reserved
+        characters cannot change the shape of the request."""
         return f"https://lichess.org/api/user/{self.quote(identifier)}"
 
     async def run(self, identifier: str, target: ScanTarget) -> SourceOutcome:
+        """Look ``identifier`` up and report what was found.
+
+        A transport failure or an unparseable body is reported as an error,
+        never as absence: this source cannot tell "no such account" from
+        "could not ask", so it refuses to guess."""
         started = self.now()
         result = await self.fetch_json(self.query_url(identifier))
         if not result.ok or result.payload is None:
@@ -521,9 +575,18 @@ class CodeforcesUser(ApiSource):
     )
 
     def query_url(self, identifier: str) -> str:
+        """The URL this source asks about ``identifier``.
+
+        Built with :meth:`quote`, so an identifier containing reserved
+        characters cannot change the shape of the request."""
         return f"https://codeforces.com/api/user.info?handles={self.quote(identifier)}"
 
     async def run(self, identifier: str, target: ScanTarget) -> SourceOutcome:
+        """Look ``identifier`` up and report what was found.
+
+        A transport failure or an unparseable body is reported as an error,
+        never as absence: this source cannot tell "no such account" from
+        "could not ask", so it refuses to guess."""
         started = self.now()
         result = await self.fetch_json(self.query_url(identifier))
         if not result.ok or result.payload is None:
@@ -597,9 +660,18 @@ class SpeedrunComUser(ApiSource):
     )
 
     def query_url(self, identifier: str) -> str:
+        """The URL this source asks about ``identifier``.
+
+        Built with :meth:`quote`, so an identifier containing reserved
+        characters cannot change the shape of the request."""
         return f"https://www.speedrun.com/api/v1/users?lookup={self.quote(identifier)}"
 
     async def run(self, identifier: str, target: ScanTarget) -> SourceOutcome:
+        """Look ``identifier`` up and report what was found.
+
+        A transport failure or an unparseable body is reported as an error,
+        never as absence: this source cannot tell "no such account" from
+        "could not ask", so it refuses to guess."""
         started = self.now()
         result = await self.fetch_json(self.query_url(identifier))
         if not result.ok or result.payload is None:

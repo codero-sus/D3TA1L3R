@@ -110,10 +110,15 @@ class BreachStatus(str, Enum):
 
     @property
     def is_answer(self) -> bool:
+        """True only when the source actually answered.
+
+        Everything else — unknown, unsupported, skipped — is a gap, and a gap
+        must never be presented as a result."""
         return self in (BreachStatus.CLEAN, BreachStatus.PWNED)
 
     @property
     def is_hit(self) -> bool:
+        """True for a positive finding."""
         return self is BreachStatus.PWNED
 
 
@@ -137,6 +142,7 @@ class BreachCheck:
     duration_ms: int = 0
 
     def to_dict(self) -> dict[str, Any]:
+        """Serialise this check for the report."""
         return {
             "entry_id": self.entry_id,
             "kind": self.kind.value,
@@ -208,6 +214,10 @@ class BreachConfig:
 
     @classmethod
     def from_env(cls, **overrides: Any) -> BreachConfig:
+        """Build a config, reading the HIBP key from the environment.
+
+        The key is never accepted as a command-line argument, because arguments
+        are visible in the process list and land in shell history."""
         key = overrides.pop("hibp_api_key", None)
         if key is None:
             key = os.environ.get(_ENV_HIBP_KEY, "").strip()
@@ -215,6 +225,7 @@ class BreachConfig:
 
     @property
     def has_hibp_key(self) -> bool:
+        """True when an HIBP key is configured."""
         return bool(self.hibp_api_key.strip())
 
 
@@ -253,16 +264,22 @@ class BreachSource:
         self.fetcher = fetcher
 
     def bind(self, fetcher: Fetcher) -> BreachSource:
+        """Attach a fetcher and return self, so sources can be bound in a comprehension."""
         self.fetcher = fetcher
         return self
 
     @property
     def http(self) -> Fetcher:
+        """The bound fetcher.
+
+        Raises:
+            RuntimeError: if the source was never bound."""
         if self.fetcher is None:  # pragma: no cover - programming error
             raise RuntimeError(f"breach source {self.id} is not bound to a Fetcher")
         return self.fetcher
 
     def supports(self, entry: VaultEntry) -> bool:
+        """Whether this source can answer for this kind of identifier."""
         return entry.kind in self.kinds
 
     def available(self, config: BreachConfig) -> tuple[bool, str]:
@@ -273,6 +290,10 @@ class BreachSource:
         """Optional hook for batch sources (called once per run)."""
 
     async def check(self, entry: VaultEntry, config: BreachConfig) -> BreachCheck:
+        """Run one check, converting any failure into an UNKNOWN gap.
+
+        A source is never allowed to fail the run: an exception becomes a
+        visible gap, because an aborted run reports less than a completed one."""
         started = time.perf_counter()
         try:
             return await self.check_one(entry, config)
@@ -288,6 +309,10 @@ class BreachSource:
             )
 
     async def check_one(self, entry: VaultEntry, config: BreachConfig) -> BreachCheck:
+        """Answer for one entry.
+
+        Raises:
+            NotImplementedError: unless the subclass implements it."""
         raise NotImplementedError
 
     def unsupported_check(self, entry: VaultEntry) -> BreachCheck:
@@ -336,6 +361,7 @@ class BreachSource:
         )
 
     def describe(self, config: BreachConfig) -> dict[str, Any]:
+        """What this source is and what it sends, for `breach sources`."""
         usable, reason = self.available(config)
         return {
             "id": self.id,
@@ -368,6 +394,10 @@ class PwnedPasswordsSource(BreachSource):
     )
 
     async def check_one(self, entry: VaultEntry, config: BreachConfig) -> BreachCheck:
+        """Answer for one entry.
+
+        Raises:
+            NotImplementedError: unless the subclass implements it."""
         started = time.perf_counter()
         if not entry.password_sha1:
             return self._result(
@@ -457,6 +487,8 @@ class HibpBreachedAccountSource(BreachSource):
     sends_data = "the email address itself (this HIBP endpoint takes the raw address)"
 
     def available(self, config: BreachConfig) -> tuple[bool, str]:
+        """``(usable, reason)`` — the reason is shown to the operator, so a source
+        that cannot run is named rather than silently dropped."""
         if config.demo:
             # Demo mode answers from a local fixture; nothing leaves the machine.
             return True, ""
@@ -469,6 +501,10 @@ class HibpBreachedAccountSource(BreachSource):
         )
 
     async def check_one(self, entry: VaultEntry, config: BreachConfig) -> BreachCheck:
+        """Answer for one entry.
+
+        Raises:
+            NotImplementedError: unless the subclass implements it."""
         started = time.perf_counter()
         url = _HIBP_BREACH_URL.format(account=quote(entry.value, safe=""))
         response = await self.http.fetch(
@@ -586,6 +622,8 @@ class LocalCorpusSource(BreachSource):
         self._prepared = False
 
     def available(self, config: BreachConfig) -> tuple[bool, str]:
+        """``(usable, reason)`` — the reason is shown to the operator, so a source
+        that cannot run is named rather than silently dropped."""
         if not self.corpus.is_file():
             return False, f"no corpus file at {self.corpus} (pass --corpus PATH)"
         return True, ""
@@ -619,6 +657,10 @@ class LocalCorpusSource(BreachSource):
             self._error = f"could not read {self.corpus}: {exc}"
 
     async def check_one(self, entry: VaultEntry, config: BreachConfig) -> BreachCheck:
+        """Answer for one entry.
+
+        Raises:
+            NotImplementedError: unless the subclass implements it."""
         if not self._prepared:
             self.prepare([entry], config)
         if self._error:
@@ -811,25 +853,37 @@ class BreachReport:
     # -- views -----------------------------------------------------------
     @property
     def pwned(self) -> list[BreachCheck]:
+        """Every positive finding."""
         return [check for check in self.checks if check.status.is_hit]
 
     @property
     def unknown(self) -> list[BreachCheck]:
+        """Every check that did not get an answer.
+
+        Reported separately from clean results, because a check that could not
+        happen is not evidence of safety."""
         return [check for check in self.checks if not check.status.is_answer]
 
     @property
     def clean(self) -> list[BreachCheck]:
+        """Every check that answered clean."""
         return [check for check in self.checks if check.status is BreachStatus.CLEAN]
 
     @property
     def sources_used(self) -> list[str]:
+        """Ids of the sources that produced at least one check."""
         return sorted({check.source_id for check in self.checks})
 
     @property
     def nothing_was_checked(self) -> bool:
+        """True when the run produced no checks at all.
+
+        Distinct from "everything was clean": an empty report is a failure to
+        look, not a clean bill of health."""
         return not self.checks
 
     def counts(self) -> dict[str, int]:
+        """How many checks landed in each status."""
         buckets = {status.value: 0 for status in BreachStatus}
         for check in self.checks:
             buckets[check.status.value] += 1
@@ -837,6 +891,7 @@ class BreachReport:
 
     @property
     def duration_ms(self) -> int:
+        """Wall-clock duration, zero while the run is still open."""
         if not self.finished_at:
             return 0
         return max(0, int((self.finished_at - self.started_at).total_seconds() * 1000))
@@ -853,6 +908,7 @@ class BreachReport:
         return BreachStatus.UNKNOWN
 
     def checks_for(self, entry_id: str) -> list[BreachCheck]:
+        """Every check recorded for one entry."""
         return [check for check in self.checks if check.entry_id == entry_id]
 
     # -- serialisation ---------------------------------------------------
@@ -886,6 +942,7 @@ class BreachReport:
         return " · ".join(parts) or "no results"
 
     def to_dict(self) -> dict[str, Any]:
+        """Serialise this check for the report."""
         return {
             "schema": "d3ta1l3r/breach/1",
             "headline": self.headline(),
@@ -913,9 +970,11 @@ class BreachReport:
         }
 
     def to_json(self, *, indent: int = 2) -> str:
+        """Serialise to JSON; round-trips through the report schema."""
         return json.dumps(self.to_dict(), indent=indent)
 
     def render_markdown(self) -> str:
+        """Render the report as markdown."""
         return render_breach_markdown(self)
 
 

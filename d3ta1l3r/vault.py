@@ -117,6 +117,7 @@ class VaultKind(str, Enum):
 
     @property
     def label(self) -> str:
+        """Plain-language description of what kind of value this is."""
         return {
             "email": "email address",
             "phone": "phone number",
@@ -198,10 +199,15 @@ class VaultEntry:
     # -- presentation ----------------------------------------------------
     @property
     def masked(self) -> str:
+        """The masked form, safe to print.
+
+        A masked value is what reports and logs use; the raw value stays inside
+        the encrypted payload."""
         return _mask(self.kind, self.value)
 
     @property
     def display(self) -> str:
+        """What to show in a list: the label if there is one, else the masked value."""
         return self.label or self.masked
 
     @property
@@ -257,6 +263,8 @@ class VaultEntry:
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> VaultEntry:
+        """Rebuild an entry from the stored form, ignoring unknown fields so an
+        entry written by a newer version still loads."""
         known = set(cls.__slots__)  # type: ignore[attr-defined]
         payload = {k: v for k, v in data.items() if k in known}
         payload["kind"] = VaultKind(payload.get("kind", "email"))
@@ -343,15 +351,18 @@ class Vault:
     # -- entries ---------------------------------------------------------
     @property
     def entries(self) -> list[VaultEntry]:
+        """Every entry in the vault."""
         return [VaultEntry.from_dict(row) for row in self._payload.get("entries", [])]
 
     def get(self, entry_id: str) -> VaultEntry | None:
+        """One entry by id, or None."""
         for entry in self.entries:
             if entry.entry_id == entry_id:
                 return entry
         return None
 
     def watchlist(self, kind: VaultKind | None = None) -> list[VaultEntry]:
+        """Entries to check, optionally narrowed to one kind."""
         entries = self.entries
         if kind is not None:
             entries = [e for e in entries if e.kind is kind]
@@ -407,6 +418,7 @@ class Vault:
         return entry, True
 
     def remove(self, entry_id: str) -> bool:
+        """Drop an entry. Returns False when no entry carried that id."""
         entries = self._payload.get("entries", [])
         remaining = [row for row in entries if row.get("entry_id") != entry_id]
         if len(remaining) == len(entries):

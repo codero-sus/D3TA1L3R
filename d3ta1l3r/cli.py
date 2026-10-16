@@ -132,6 +132,7 @@ _ANSI = {
 # parser
 # ---------------------------------------------------------------------------
 def build_parser() -> argparse.ArgumentParser:
+    """Build the command-line parser."""
     parser = argparse.ArgumentParser(
         prog="d3ta1l3r",
         description=(
@@ -693,6 +694,10 @@ def cmd_update(args: argparse.Namespace) -> int:
 # entry point
 # ---------------------------------------------------------------------------
 def main(argv: Sequence[str] | None = None) -> int:
+    """Entry point. Returns the process exit code.
+
+        Every error path is caught here and turned into a message plus a code,
+        so a traceback never reaches the user."""
     parser = build_parser()
     args = parser.parse_args(argv)
     try:
@@ -749,6 +754,7 @@ def _announce_mode(mode: int, console: _Console) -> None:
 
 
 def cmd_scan(args: argparse.Namespace) -> int:
+    """Run a scan and report the findings."""
     usernames = _split_values(args.username)
     emails = _split_values(args.email)
     names = _split_values(args.name)
@@ -1026,6 +1032,7 @@ def cmd_calibrate(args: argparse.Namespace) -> int:
     }
 
     async def run_all() -> None:
+        """Scan each control handle and fold the results into the false-positive tally."""
         for handle in bogus:
             report = await engine.scan(ScanTarget.create(username=handle))
             for outcome in report.outcomes:
@@ -1142,6 +1149,7 @@ def _bogus_handle() -> str:
 # diff
 # ---------------------------------------------------------------------------
 def cmd_diff(args: argparse.Namespace) -> int:
+    """Compare two stored reports."""
     previous = _load_report(args.previous)
     current = _load_report(args.current)
     difference = diff_reports(previous, current)
@@ -1166,6 +1174,10 @@ def _load_report(path: str | Path) -> ScanReport:
 # web
 # ---------------------------------------------------------------------------
 def cmd_web(args: argparse.Namespace) -> int:
+    """Serve the local dashboard.
+
+        Raises:
+            UsageError: if the web extra is not installed."""
     try:
         import uvicorn
     except ImportError as exc:  # pragma: no cover - optional dependency
@@ -1240,6 +1252,7 @@ def _verify_vault_at_startup(path: Path) -> None:
 # vault
 # ---------------------------------------------------------------------------
 def cmd_vault(args: argparse.Namespace) -> int:
+    """Manage the encrypted watchlist."""
     if args.vault_command == "where":
         return _vault_where(args)
     if args.vault_command == "init":
@@ -1496,6 +1509,7 @@ def _vault_rotate(vault: Vault, args: argparse.Namespace) -> int:
 # breach
 # ---------------------------------------------------------------------------
 def cmd_breach(args: argparse.Namespace) -> int:
+    """Breach and leak checking."""
     if args.breach_command == "sources":
         return _breach_sources(args)
     if args.breach_command == "corpus-hash":
@@ -1629,6 +1643,7 @@ def _breach_run(args: argparse.Namespace) -> int:
     on_event = None
     if not (args.quiet or args.json):
         def on_event(event: dict[str, Any]) -> None:
+            """Print breach-run progress to stderr."""
             kind = str(event.get("type", ""))
             if kind in {"entry_started", "source_unavailable"}:
                 print(f"  {event.get('message', '')}", file=sys.stderr)
@@ -1929,6 +1944,7 @@ def _models_pull(args: argparse.Namespace) -> int:
             return EXIT_OK
 
     def progress(phase: str, done: int, total: int) -> None:
+        """Print download progress for a model fetch."""
         if phase == "done":
             print(f"\rdownloaded {model_catalog.format_bytes(done)}" + " " * 20)
             return
@@ -2373,6 +2389,7 @@ class _Console:
         return f"{_ANSI.get(colour, '')}{text}{_ANSI['reset']}"
 
     def event(self, event: ScanEvent) -> None:
+        """Print one progress event, honouring --quiet and --verbose."""
         if self.quiet:
             return
         if self.verbose:
@@ -2393,10 +2410,15 @@ class _Console:
                 self.stream.write("\n")
 
     def note(self, message: str) -> None:
+        """Print a line unless --quiet was given."""
         if not self.quiet:
             print(message, file=self.stream)
 
     def summary(self, report: ScanReport, written: Sequence[Path] = (), *, demo: bool = False) -> None:
+        """Print the end-of-run summary.
+
+        The counts include the sources that failed, because a run that could
+        not ask is not the same as a run that asked and found nothing."""
         if self.quiet:
             print(
                 f"{report.target.display()}: {report.stats.findings_total} finding(s), "

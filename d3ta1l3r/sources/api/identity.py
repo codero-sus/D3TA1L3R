@@ -37,9 +37,18 @@ class GravatarEmail(ApiSource):
     )
 
     def query_url(self, identifier: str) -> str:
+        """The URL this source asks about ``identifier``.
+
+        Built with :meth:`quote`, so an identifier containing reserved
+        characters cannot change the shape of the request."""
         return _GRAVATAR_URL.format(md5=self.md5(identifier.strip().lower()))
 
     async def run(self, identifier: str, target: ScanTarget) -> SourceOutcome:
+        """Look ``identifier`` up and report what was found.
+
+        A transport failure or an unparseable body is reported as an error,
+        never as absence: this source cannot tell "no such account" from
+        "could not ask", so it refuses to guess."""
         started = self.now()
         url = self.query_url(identifier)
         result = await self.fetch_json(url, headers={"Accept": "application/json"})
@@ -132,9 +141,18 @@ class RdapDomain(ApiSource):
     )
 
     def query_url(self, identifier: str) -> str:
+        """The URL this source asks about ``identifier``.
+
+        Built with :meth:`quote`, so an identifier containing reserved
+        characters cannot change the shape of the request."""
         return _RDAP_URL.format(domain=self.quote(identifier))
 
     async def run(self, identifier: str, target: ScanTarget) -> SourceOutcome:
+        """Look ``identifier`` up and report what was found.
+
+        A transport failure or an unparseable body is reported as an error,
+        never as absence: this source cannot tell "no such account" from
+        "could not ask", so it refuses to guess."""
         started = self.now()
         url = self.query_url(identifier)
         result = await self.fetch_json(url, accept="application/rdap+json, application/json")
@@ -227,4 +245,5 @@ def _days_until(timestamp: str | None) -> int | None:
 
 
 def build() -> list[ApiSource]:
+    """The sources this module provides."""
     return [GravatarEmail(), RdapDomain()]

@@ -133,6 +133,7 @@ class UpdateInfo:
 
     @property
     def available(self) -> bool:
+        """True when an update is both reachable and newer than what is installed."""
         if not self.reachable:
             return False
         if self.mode == "branch":
@@ -141,6 +142,7 @@ class UpdateInfo:
         return bool(self.latest and is_newer(self.latest, self.current))
 
     def to_dict(self) -> dict[str, Any]:
+        """Serialise the update status for the API."""
         return {
             "current": self.current,
             "latest": self.latest or None,
