@@ -568,3 +568,77 @@ class TestAskCommand:
         assert "RAM budget: 4096 MB" in out
         assert "Qwen2.5-1.5B" in out
         assert "llama-cpp-python" in out
+
+
+class TestBackendsExplainThemselves:
+    """Every way a local backend can be unavailable, and what the user is told.
+
+    The rule these serve: "no model available" must never be presented as a
+    completed review. A backend that cannot run has to say which one it is and
+    why, so the user can fix it — a bare "unavailable" reads as a verdict.
+    """
+
+    def _ollama(self, handler, model: str = "llama3.2:1b") -> OllamaBackend:
+        return OllamaBackend(model, transport=httpx.MockTransport(handler), timeout=5)
+
+    def test_a_daemon_that_is_not_running_is_reported_by_name(self) -> None:
+        def handler(request: httpx.Request) -> httpx.Response:
+            raise httpx.ConnectError("connection refused", request=request)
+
+        ok, reason = self._ollama(handler).available()
+        assert not ok
+        assert "no Ollama daemon" in reason
+
+    def test_a_daemon_answering_an_error_status_says_which_status(self) -> None:
+        ok, reason = self._ollama(lambda r: httpx.Response(503)).available()
+        assert not ok
+        assert "503" in reason
+
+    def test_a_daemon_running_with_no_models_says_how_to_fix_it(self) -> None:
+        ok, reason = self._ollama(
+            lambda r: httpx.Response(200, json={"models": []})
+        ).available()
+        assert not ok
+        assert "ollama pull" in reason, "the user needs the next action, not a verdict"
+
+    def test_a_daemon_sending_unreadable_json_is_reported(self) -> None:
+        ok, reason = self._ollama(
+            lambda r: httpx.Response(200, text="<html>not json</html>")
+        ).available()
+        assert not ok
+        assert "cannot read" in reason
+
+    def test_a_failed_generation_names_the_status(self) -> None:
+        backend = self._ollama(lambda r: httpx.Response(500, text="boom"))
+        with pytest.raises(UsageError, match=r"500"):
+            backend.generate([{"role": "user", "content": "hello"}])
+
+    def test_an_empty_answer_is_an_error_not_a_silent_success(self) -> None:
+        """An empty completion must not be reported as a finished review."""
+        def handler(request: httpx.Request) -> httpx.Response:
+            if request.url.path.endswith("/api/tags"):
+                return httpx.Response(200, json={"models": [{"name": "llama3.2:1b"}]})
+            return httpx.Response(200, json={"message": {"content": "   "}})
+
+        backend = self._ollama(handler)
+        with pytest.raises(UsageError, match=r"(?i)empty"):
+            backend.generate([{"role": "user", "content": "hello"}])
+
+    def test_availability_is_probed_once_not_per_call(self) -> None:
+        """Re-probing on every question would add latency to every answer."""
+        calls: list[int] = []
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            calls.append(1)
+            return httpx.Response(200, json={"models": [{"name": "llama3.2:1b"}]})
+
+        backend = self._ollama(handler)
+        backend.available()
+        backend.available()
+        assert len(calls) == 1, calls
+
+    def test_ollama_is_described_as_local(self) -> None:
+        backend = self._ollama(
+            lambda r: httpx.Response(200, json={"models": [{"name": "llama3.2:1b"}]})
+        )
+        assert backend.describe()["local_only"] is True
