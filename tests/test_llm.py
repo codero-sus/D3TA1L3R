@@ -43,6 +43,7 @@ from d3ta1l3r.llm.backends import (
     DEFAULT_RAM_BUDGET_MB,
     GGUF_MAGIC,
     OLLAMA_AUTO,
+    CortexBackend,
     estimate_model_ram_mb,
     is_loopback_host,
 )
@@ -722,3 +723,92 @@ class TestFormatting:
         class _Spec:
             size_mb = 100
         assert total_size_mb([_Spec(), _Spec(), _Spec()]) == 300
+
+
+class TestLlamaCppBackend:
+    """The optional local backend: it must say what is missing and how to fix it."""
+
+    def _backend(self, tmp_path: Path, **kwargs) -> LlamaCppBackend:
+        model = tmp_path / "model.gguf"
+        model.write_bytes(GGUF_MAGIC + b"\x00" * 64)
+        return LlamaCppBackend(model, **kwargs)
+
+    def test_a_model_that_is_not_there_is_reported(self, tmp_path: Path) -> None:
+        backend = LlamaCppBackend(tmp_path / "missing.gguf")
+        ok, reason = backend.available()
+        assert not ok
+        assert "no model file" in reason
+
+    def test_a_missing_library_names_the_pip_line(self, tmp_path: Path, monkeypatch) -> None:
+        import builtins
+
+        real_import = builtins.__import__
+
+        def refuse(name, *a, **k):
+            if name == "llama_cpp":
+                raise ImportError("no module named llama_cpp")
+            return real_import(name, *a, **k)
+
+        monkeypatch.setattr(builtins, "__import__", refuse)
+        ok, reason = self._backend(tmp_path).available()
+        assert not ok
+        assert "pip install llama-cpp-python" in reason
+
+    def test_a_model_over_the_ram_budget_is_refused_with_both_numbers(
+        self, tmp_path: Path
+    ) -> None:
+        """Naming both numbers is what lets the user decide the trade."""
+        backend = self._backend(tmp_path, ram_budget_mb=1)
+        ok, reason = backend.available()
+        assert not ok
+        assert "budget" in reason.lower()
+        assert "ram-budget" in reason
+
+    def test_the_model_path_is_reported(self, tmp_path: Path) -> None:
+        assert "model.gguf" in self._backend(tmp_path).describe()["model_path"]
+
+
+class TestCortexBackend:
+    """Cortex is local by default; a LAN host is allowed only when named."""
+
+    def test_the_default_host_is_loopback(self) -> None:
+        assert is_loopback_host("http://127.0.0.1:8080") is True
+
+    def test_a_non_loopback_internet_host_is_refused(self) -> None:
+        with pytest.raises(UsageError, match=r"(?i)loopback|lan|host"):
+            CortexBackend(host="http://models.example.com:8080")
+
+    def test_a_lan_host_is_refused_unless_named_on_purpose(self) -> None:
+        """The default must refuse: a prompt crossing the LAN is a real change."""
+        with pytest.raises(UsageError, match=r"(?i)--cortex-host"):
+            CortexBackend(host="http://192.168.1.50:8080")
+
+    def test_a_lan_host_is_allowed_but_flagged_as_not_local_only(self) -> None:
+        """Once the user names it, it is permitted — and visibly not loopback."""
+        backend = CortexBackend(host="http://192.168.1.50:8080", allow_lan=True)
+        assert backend.describe()["local_only"] is False
+        assert backend.describe()["on_lan"] is True
+
+    def test_loopback_is_described_as_local_only(self) -> None:
+        backend = CortexBackend(host="http://127.0.0.1:8080")
+        assert backend.describe()["local_only"] is True
+
+    def test_a_daemon_that_is_not_there_is_reported_by_name(self) -> None:
+        def handler(request: httpx.Request) -> httpx.Response:
+            raise httpx.ConnectError("refused", request=request)
+
+        backend = CortexBackend(
+            host="http://127.0.0.1:8080", transport=httpx.MockTransport(handler)
+        )
+        ok, reason = backend.available()
+        assert not ok
+        assert "no Cortex server" in reason
+
+    def test_a_401_says_which_variable_holds_the_key(self) -> None:
+        backend = CortexBackend(
+            host="http://127.0.0.1:8080",
+            transport=httpx.MockTransport(lambda r: httpx.Response(401)),
+        )
+        ok, reason = backend.available()
+        assert not ok
+        assert "bearer key" in reason.lower()
