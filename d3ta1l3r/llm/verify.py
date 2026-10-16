@@ -96,6 +96,7 @@ class Verdict(str, Enum):
 
     @property
     def label(self) -> str:
+        """Plain-language verdict, so a report never shows a raw enum."""
         return {
             "mine": "looks like you",
             "not_mine": "probably not you",
@@ -126,6 +127,7 @@ class FindingVerdict:
         }
 
     def to_dict(self) -> dict[str, Any]:
+        """Serialise for the report."""
         return {
             "finding_id": self.finding_id,
             "verdict": self.verdict.value,
@@ -155,6 +157,7 @@ class VerdictTally:
     considered: int = 0
 
     def add(self, verdict: FindingVerdict) -> None:
+        """Fold one verdict into the tally."""
         self.considered += 1
         if not verdict.parsed:
             self.unparsed += 1
@@ -166,6 +169,7 @@ class VerdictTally:
             self.unsure += 1
 
     def to_dict(self) -> dict[str, Any]:
+        """Serialise for the report."""
         return {
             "considered": self.considered,
             "mine": self.mine,
@@ -189,15 +193,18 @@ class VerificationResult:
     notes: list[str] = field(default_factory=list)
 
     def tally(self) -> VerdictTally:
+        """Count the verdicts collected so far."""
         tally = VerdictTally()
         for verdict in self.verdicts:
             tally.add(verdict)
         return tally
 
     def by_id(self, finding_id: str) -> FindingVerdict | None:
+        """The verdict for one finding, or None if it was not considered."""
         return next((v for v in self.verdicts if v.finding_id == finding_id), None)
 
     def to_dict(self) -> dict[str, Any]:
+        """Serialise for the report."""
         return {
             "backend": self.backend,
             "model": self.model,
@@ -477,4 +484,5 @@ def render_verification_markdown(result: VerificationResult, *, max_rows: int = 
 
 
 def to_json(result: VerificationResult) -> str:
+    """Serialise a verification result."""
     return json.dumps(result.to_dict(), indent=2)

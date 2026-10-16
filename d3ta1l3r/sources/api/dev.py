@@ -40,9 +40,18 @@ class GitHubUser(ApiSource):
     )
 
     def query_url(self, identifier: str) -> str:
+        """The URL this source asks about ``identifier``.
+
+        Built with :meth:`quote`, so an identifier containing reserved
+        characters cannot change the shape of the request."""
         return f"https://api.github.com/users/{self.quote(identifier)}"
 
     async def run(self, identifier: str, target: ScanTarget) -> SourceOutcome:
+        """Look ``identifier`` up and report what was found.
+
+        A transport failure or an unparseable body is reported as an error,
+        never as absence: this source cannot tell "no such account" from
+        "could not ask", so it refuses to guess."""
         started = self.now()
         result = await self.fetch_json(self.query_url(identifier))
         if not result.ok or result.payload is None:
@@ -118,9 +127,18 @@ class GitHubEmailSearch(ApiSource):
     )
 
     def query_url(self, identifier: str) -> str:
+        """The URL this source asks about ``identifier``.
+
+        Built with :meth:`quote`, so an identifier containing reserved
+        characters cannot change the shape of the request."""
         return f"https://api.github.com/search/users?q={self.quote(identifier)}+in:email"
 
     async def run(self, identifier: str, target: ScanTarget) -> SourceOutcome:
+        """Look ``identifier`` up and report what was found.
+
+        A transport failure or an unparseable body is reported as an error,
+        never as absence: this source cannot tell "no such account" from
+        "could not ask", so it refuses to guess."""
         started = self.now()
         result = await self.fetch_json(
             self.query_url(identifier),
@@ -169,9 +187,18 @@ class GitLabUser(ApiSource):
     )
 
     def query_url(self, identifier: str) -> str:
+        """The URL this source asks about ``identifier``.
+
+        Built with :meth:`quote`, so an identifier containing reserved
+        characters cannot change the shape of the request."""
         return f"https://gitlab.com/api/v4/users?username={self.quote(identifier)}"
 
     async def run(self, identifier: str, target: ScanTarget) -> SourceOutcome:
+        """Look ``identifier`` up and report what was found.
+
+        A transport failure or an unparseable body is reported as an error,
+        never as absence: this source cannot tell "no such account" from
+        "could not ask", so it refuses to guess."""
         started = self.now()
         result = await self.fetch_json(self.query_url(identifier))
         if not result.ok or result.payload is None:
@@ -244,9 +271,18 @@ class CodebergUser(ApiSource):
     )
 
     def query_url(self, identifier: str) -> str:
+        """The URL this source asks about ``identifier``.
+
+        Built with :meth:`quote`, so an identifier containing reserved
+        characters cannot change the shape of the request."""
         return f"https://codeberg.org/api/v1/users/{self.quote(identifier)}"
 
     async def run(self, identifier: str, target: ScanTarget) -> SourceOutcome:
+        """Look ``identifier`` up and report what was found.
+
+        A transport failure or an unparseable body is reported as an error,
+        never as absence: this source cannot tell "no such account" from
+        "could not ask", so it refuses to guess."""
         started = self.now()
         result = await self.fetch_json(self.query_url(identifier))
         if not result.ok or result.payload is None:
@@ -288,9 +324,18 @@ class DockerHubUser(ApiSource):
     )
 
     def query_url(self, identifier: str) -> str:
+        """The URL this source asks about ``identifier``.
+
+        Built with :meth:`quote`, so an identifier containing reserved
+        characters cannot change the shape of the request."""
         return f"https://hub.docker.com/v2/users/{self.quote(identifier)}/"
 
     async def run(self, identifier: str, target: ScanTarget) -> SourceOutcome:
+        """Look ``identifier`` up and report what was found.
+
+        A transport failure or an unparseable body is reported as an error,
+        never as absence: this source cannot tell "no such account" from
+        "could not ask", so it refuses to guess."""
         started = self.now()
         result = await self.fetch_json(self.query_url(identifier))
         if not result.ok or result.payload is None:
@@ -344,9 +389,18 @@ class KeybaseUser(ApiSource):
     )
 
     def query_url(self, identifier: str) -> str:
+        """The URL this source asks about ``identifier``.
+
+        Built with :meth:`quote`, so an identifier containing reserved
+        characters cannot change the shape of the request."""
         return f"https://keybase.io/_/api/1.0/user/lookup.json?username={self.quote(identifier)}"
 
     async def run(self, identifier: str, target: ScanTarget) -> SourceOutcome:
+        """Look ``identifier`` up and report what was found.
+
+        A transport failure or an unparseable body is reported as an error,
+        never as absence: this source cannot tell "no such account" from
+        "could not ask", so it refuses to guess."""
         started = self.now()
         result = await self.fetch_json(self.query_url(identifier))
         if not result.ok or result.payload is None:
@@ -436,9 +490,18 @@ class NpmMaintainerHandle(ApiSource):
     )
 
     def query_url(self, identifier: str) -> str:
+        """The URL this source asks about ``identifier``.
+
+        Built with :meth:`quote`, so an identifier containing reserved
+        characters cannot change the shape of the request."""
         return f"https://registry.npmjs.org/-/v1/search?text=maintainer:{self.quote(identifier)}&size=20"
 
     async def run(self, identifier: str, target: ScanTarget) -> SourceOutcome:
+        """Look ``identifier`` up and report what was found.
+
+        A transport failure or an unparseable body is reported as an error,
+        never as absence: this source cannot tell "no such account" from
+        "could not ask", so it refuses to guess."""
         started = self.now()
         result = await self.fetch_json(self.query_url(identifier))
         if not result.ok or result.payload is None:
@@ -489,12 +552,21 @@ class NpmMaintainerEmail(ApiSource):
     )
 
     def query_url(self, identifier: str) -> str:
+        """The URL this source asks about ``identifier``.
+
+        Built with :meth:`quote`, so an identifier containing reserved
+        characters cannot change the shape of the request."""
         return (
             "https://registry.npmjs.org/-/v1/search?"
             f"text=maintainer-email:{self.quote(identifier)}&size=20"
         )
 
     async def run(self, identifier: str, target: ScanTarget) -> SourceOutcome:
+        """Look ``identifier`` up and report what was found.
+
+        A transport failure or an unparseable body is reported as an error,
+        never as absence: this source cannot tell "no such account" from
+        "could not ask", so it refuses to guess."""
         started = self.now()
         result = await self.fetch_json(self.query_url(identifier))
         if not result.ok or result.payload is None:
@@ -548,9 +620,18 @@ class DevToUser(ApiSource):
     )
 
     def query_url(self, identifier: str) -> str:
+        """The URL this source asks about ``identifier``.
+
+        Built with :meth:`quote`, so an identifier containing reserved
+        characters cannot change the shape of the request."""
         return f"https://dev.to/api/users/by_username?url={self.quote(identifier)}"
 
     async def run(self, identifier: str, target: ScanTarget) -> SourceOutcome:
+        """Look ``identifier`` up and report what was found.
+
+        A transport failure or an unparseable body is reported as an error,
+        never as absence: this source cannot tell "no such account" from
+        "could not ask", so it refuses to guess."""
         started = self.now()
         result = await self.fetch_json(self.query_url(identifier))
         if not result.ok or result.payload is None:

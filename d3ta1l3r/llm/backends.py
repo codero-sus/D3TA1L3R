@@ -89,6 +89,7 @@ class ModelRecommendation:
     note: str
 
     def to_dict(self) -> dict[str, Any]:
+        """Serialise for the API and for `d3ta1l3r models`."""
         return {
             "name": self.name,
             "parameters": self.parameters,
@@ -146,17 +147,23 @@ class LLMBackend:
     # -- capability ------------------------------------------------------
     @property
     def model_id(self) -> str:  # pragma: no cover - overridden
+        """The model this backend answers with; overridden by subclasses."""
         return self.name
 
     def available(self) -> tuple[bool, str]:  # pragma: no cover - overridden
+        """``(usable, reason)``; overridden by subclasses."""
         return False, "not implemented"
 
     # -- generation ------------------------------------------------------
     def generate(self, messages: Sequence[dict[str, str]], *, context_text: str = "") -> str:
+        """The model this backend answers with, for display and for reports."""
+        """``(usable, reason)`` — the reason is shown to the user, so a backend that
+        cannot run is named instead of silently producing nothing."""
         """Produce an answer. ``context_text`` is used by the fallback."""
         raise NotImplementedError
 
     def describe(self) -> dict[str, Any]:
+        """What this backend is and whether it can answer right now."""
         ok, reason = self.available()
         return {
             "name": self.name,
@@ -195,12 +202,16 @@ class LlamaCppBackend(LLMBackend):
 
     @property
     def model_id(self) -> str:
+        """The model this backend answers with, for display and for reports."""
         return self.model_path.name
 
     def estimate_ram_mb(self) -> int:
+        """Rough working-set estimate, so the user can see the cost before loading."""
         return estimate_model_ram_mb(self.model_path, context_window=self.context_window)
 
     def available(self) -> tuple[bool, str]:
+        """``(usable, reason)`` — the reason is shown to the user, so a backend that
+        cannot run is named instead of silently producing nothing."""
         if not self.model_path.is_file():
             return False, f"no model file at {self.model_path}"
         try:
@@ -239,6 +250,10 @@ class LlamaCppBackend(LLMBackend):
         return self._llm
 
     def generate(self, messages: Sequence[dict[str, str]], *, context_text: str = "") -> str:
+        """Answer from ``messages``.
+
+        Raises:
+            UsageError: if the backend is present but cannot answer."""
         llm = self._load()
         try:
             result = llm.create_chat_completion(
@@ -256,6 +271,7 @@ class LlamaCppBackend(LLMBackend):
             return str(result["choices"][0]["text"]).strip()
 
     def describe(self) -> dict[str, Any]:
+        """What this backend is and whether it can answer right now."""
         info = super().describe()
         info.update(
             {
@@ -308,6 +324,7 @@ class OllamaBackend(LLMBackend):
 
     @property
     def model_id(self) -> str:
+        """The model this backend answers with, for display and for reports."""
         return self.resolved_model
 
     def served_models(self) -> list[str]:
@@ -322,6 +339,8 @@ class OllamaBackend(LLMBackend):
         )
 
     def available(self) -> tuple[bool, str]:
+        """``(usable, reason)`` — the reason is shown to the user, so a backend that
+        cannot run is named instead of silently producing nothing."""
         if self._checked is not None:
             return self._checked
         try:
@@ -368,6 +387,10 @@ class OllamaBackend(LLMBackend):
         return self._checked
 
     def generate(self, messages: Sequence[dict[str, str]], *, context_text: str = "") -> str:
+        """Answer from ``messages``.
+
+        Raises:
+            UsageError: if the backend is present but cannot answer."""
         if self._resolved is None:
             ok, reason = self.available()
             if not ok:
@@ -393,6 +416,7 @@ class OllamaBackend(LLMBackend):
         return text
 
     def describe(self) -> dict[str, Any]:
+        """What this backend is and whether it can answer right now."""
         info = super().describe()
         info.update({"host": self.host, "local_only": True})
         return info
@@ -461,6 +485,7 @@ class CortexBackend(LLMBackend):
 
     @property
     def model_id(self) -> str:
+        """The model this backend answers with, for display and for reports."""
         return self.resolved_model
 
     def served_models(self) -> list[str]:
@@ -479,6 +504,8 @@ class CortexBackend(LLMBackend):
         )
 
     def available(self) -> tuple[bool, str]:
+        """``(usable, reason)`` — the reason is shown to the user, so a backend that
+        cannot run is named instead of silently producing nothing."""
         if self._checked is not None:
             return self._checked
         try:
@@ -529,6 +556,10 @@ class CortexBackend(LLMBackend):
         return self._checked
 
     def generate(self, messages: Sequence[dict[str, str]], *, context_text: str = "") -> str:
+        """Answer from ``messages``.
+
+        Raises:
+            UsageError: if the backend is present but cannot answer."""
         if self._resolved is None:
             ok, reason = self.available()
             if not ok:
@@ -563,6 +594,7 @@ class CortexBackend(LLMBackend):
         return text
 
     def describe(self) -> dict[str, Any]:
+        """What this backend is and whether it can answer right now."""
         info = super().describe()
         info.update({"host": self.host, "local_only": not self.on_lan, "on_lan": self.on_lan})
         return info
@@ -648,16 +680,24 @@ class ExtractiveBackend(LLMBackend):
 
     @property
     def model_id(self) -> str:
+        """The model this backend answers with, for display and for reports."""
         return "keyword retrieval over the report"
 
     def available(self) -> tuple[bool, str]:
+        """``(usable, reason)`` — the reason is shown to the user, so a backend that
+        cannot run is named instead of silently producing nothing."""
         return True, "always available (no model loaded)"
 
     def generate(self, messages: Sequence[dict[str, str]], *, context_text: str = "") -> str:
+        """Answer from ``messages``.
+
+        Raises:
+            UsageError: if the backend is present but cannot answer."""
         question = _question_from(messages)
         return answer_from_context(question, context_text, max_items=self.max_items)
 
     def describe(self) -> dict[str, Any]:
+        """What this backend is and whether it can answer right now."""
         info = super().describe()
         info["note"] = "no model installed — this answers from the report by keyword retrieval"
         return info

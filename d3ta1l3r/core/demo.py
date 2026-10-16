@@ -102,6 +102,8 @@ class DemoTransport(httpx.AsyncBaseTransport):
                               request=request)
 
     async def aclose(self) -> None:  # pragma: no cover - nothing to close
+        """Present so this satisfies the httpx transport interface; there is no
+        connection to release."""
         return None
 
     # -- routing ---------------------------------------------------------

@@ -83,6 +83,7 @@ class ContextItem:
     refs: dict[str, Any] = field(default_factory=dict)
 
     def line(self) -> str:
+        """The citation form: ``[ID] text``, which is what the model is asked to cite."""
         return f"[{self.id}] {self.text}"
 
 
@@ -96,13 +97,16 @@ class ScanContext:
     breach: dict[str, Any] | None = None
 
     def by_id(self, item_id: str) -> ContextItem | None:
+        """Look up an item by citation id, case-insensitively."""
         wanted = item_id.strip().upper()
         return next((item for item in self.items if item.id == wanted), None)
 
     def ids(self) -> set[str]:
+        """Every citation id currently in scope."""
         return {item.id for item in self.items}
 
     def findings(self) -> list[ContextItem]:
+        """Just the items that describe findings."""
         return [item for item in self.items if item.kind == "finding"]
 
     def render(self, *, max_chars: int = 6000, kinds: Sequence[str] | None = None) -> str:
@@ -122,6 +126,8 @@ class ScanContext:
         return "\n".join(out)
 
     def to_dict(self, *, max_chars: int = 6000) -> dict[str, Any]:
+        """Serialise for the prompt and the audit trail. ``max_chars`` keeps a huge
+        scan from being pasted wholesale into a prompt."""
         return {
             "values_included": self.values_included,
             "scans": [r.scan_id for r in self.reports],
@@ -270,6 +276,7 @@ def _scrub_pairs(reports: Sequence[ScanReport], watchlist: Sequence[VaultEntry])
     pairs: dict[str, str] = {}
 
     def add(raw: str, masked: str) -> None:
+        """Record a raw value and its masked form so an answer can be de-masked later."""
         raw = (raw or "").strip()
         if raw and masked and raw != masked:
             pairs[raw] = masked

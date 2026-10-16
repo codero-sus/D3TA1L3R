@@ -185,9 +185,12 @@ class AppSettings:
 
     @property
     def vault_ready(self) -> bool:
+        """True when a vault is open, which is what gates the vault-only routes."""
         return self.vault is not None
 
     def effective_trusted_origins(self) -> tuple[str, ...]:
+        """Origins allowed to reach state-changing routes, falling back to the
+        defaults for this host."""
         return self.trusted_origins or default_trusted_origins()
 
 
@@ -314,6 +317,7 @@ class ModelPullState:
     task: asyncio.Task | None = None
 
     def to_dict(self) -> dict[str, Any]:
+        """Serialise for the API."""
         percent = (
             round(self.done_bytes / self.total_bytes * 100)
             if self.total_bytes > 0
@@ -349,9 +353,11 @@ class RunState:
 
     @property
     def primary(self) -> ScanReport | None:
+        """The most recent report of the run, or None before the first finishes."""
         return self.reports[-1] if self.reports else None
 
     def to_dict(self) -> dict[str, Any]:
+        """Serialise for the API."""
         return {
             "run_id": self.run_id,
             "status": self.status,
@@ -383,6 +389,7 @@ class BreachState:
     events: deque[dict[str, Any]] = field(default_factory=lambda: deque(maxlen=_MAX_EVENTS))
 
     def to_dict(self) -> dict[str, Any]:
+        """Serialise for the API."""
         payload: dict[str, Any] = {
             "status": self.status,
             "triggered_by": self.triggered_by,
@@ -402,6 +409,10 @@ class BreachState:
 
 
 def create_app(settings: AppSettings | None = None) -> FastAPI:
+    """Build the dashboard application.
+
+        Raises:
+            UsageError: if the auth settings are not internally consistent."""
     settings = settings or AppSettings()
     settings.auth.validate()
     store = ScanStore(settings.output_dir)
@@ -653,6 +664,7 @@ def create_app(settings: AppSettings | None = None) -> FastAPI:
     # -- authentication routes -------------------------------------------
     @app.get("/login", response_class=HTMLResponse)
     async def login_page(request: Request) -> Any:
+        """The sign-in form."""
         if not guard_on:
             return RedirectResponse("/", status_code=303)
         if _signed_in(request):
@@ -668,6 +680,10 @@ def create_app(settings: AppSettings | None = None) -> FastAPI:
 
     @app.post("/login")
     async def login_submit(request: Request) -> Any:
+        """Check the passphrase and open a session.
+
+        The vault passphrase is the only credential: there is deliberately no
+        second password to remember or to store badly."""
         if not guard_on:
             return RedirectResponse("/", status_code=303)
         if settings.vault is None and settings.vault_path is None:
@@ -725,6 +741,7 @@ def create_app(settings: AppSettings | None = None) -> FastAPI:
 
     @app.post("/logout")
     async def logout(request: Request) -> Any:
+        """Revoke the session and forget any chats held for it."""
         if _token(request):
             chats.pop(hashlib.sha256((_token(request) or "").encode()).hexdigest()[:16], None)
         sessions.revoke(_token(request))
@@ -739,6 +756,7 @@ def create_app(settings: AppSettings | None = None) -> FastAPI:
     # -- pages -----------------------------------------------------------
     @app.get("/", response_class=HTMLResponse)
     async def index(request: Request) -> Any:
+        """The dashboard."""
         redirect = _guard_page(request)
         if redirect is not None:
             return redirect
@@ -758,6 +776,7 @@ def create_app(settings: AppSettings | None = None) -> FastAPI:
 
     @app.get("/scans/{scan_id}", response_class=HTMLResponse)
     async def scan_page(request: Request, scan_id: str) -> Any:
+        """One stored scan."""
         redirect = _guard_page(request)
         if redirect is not None:
             return redirect
@@ -777,6 +796,7 @@ def create_app(settings: AppSettings | None = None) -> FastAPI:
 
     @app.get("/sources", response_class=HTMLResponse)
     async def sources_page(request: Request) -> Any:
+        """The source inventory."""
         redirect = _guard_page(request)
         if redirect is not None:
             return redirect
@@ -806,6 +826,7 @@ def create_app(settings: AppSettings | None = None) -> FastAPI:
 
     @app.get("/api/sources")
     async def api_sources(_: None = Depends(require_session)) -> dict[str, Any]:
+        """Source inventory as JSON."""
         engine = ScanEngine(settings.base_config())
         rows = engine.describe_sources()
         return {"count": len(rows), "sources": rows}
@@ -831,12 +852,14 @@ def create_app(settings: AppSettings | None = None) -> FastAPI:
 
     @app.get("/api/scans")
     async def api_scans(_: None = Depends(require_session)) -> dict[str, Any]:
+        """Stored and in-flight scans."""
         stored = [meta.to_dict() for meta in store.list()]
         active = [run.to_dict() for run in runs.values()]
         return {"stored": stored, "active": active}
 
     @app.get("/api/scans/{scan_id}")
     async def api_scan(scan_id: str, _: None = Depends(require_session)) -> JSONResponse:
+        """One scan's state, whether it is still running or already stored."""
         run = runs.get(scan_id)
         if run is not None:
             return JSONResponse(run.to_dict())
@@ -849,6 +872,7 @@ def create_app(settings: AppSettings | None = None) -> FastAPI:
     async def api_start_scan(
         payload: ScanRequest, _: None = Depends(require_session)
     ) -> JSONResponse:
+        """Start a scan in the background and return its run id."""
         try:
             targets = payload.targets()
         except UsageError as exc:
@@ -871,6 +895,7 @@ def create_app(settings: AppSettings | None = None) -> FastAPI:
 
     @app.get("/api/scans/{scan_id}/events")
     async def api_events(scan_id: str, request: Request) -> StreamingResponse:
+        """Server-sent progress for one run."""
         if not _signed_in(request):
             raise HTTPException(status_code=401, detail="sign in to use the dashboard")
         run = runs.get(scan_id)
@@ -880,6 +905,7 @@ def create_app(settings: AppSettings | None = None) -> FastAPI:
         run.subscribers.add(queue)
 
         async def stream():
+            """Yield the backlog, then live events until the run settles."""
             try:
                 for event in list(run.events):
                     yield _sse(event)
@@ -914,6 +940,7 @@ def create_app(settings: AppSettings | None = None) -> FastAPI:
     async def api_report(
         scan_id: str, suffix: str, _: None = Depends(require_session)
     ) -> Any:
+        """A stored report in the requested format."""
         report = store.load(scan_id) or _run_report(runs.get(scan_id))
         if report is None:
             raise HTTPException(status_code=404, detail=f"no such scan: {scan_id}")
@@ -929,6 +956,7 @@ def create_app(settings: AppSettings | None = None) -> FastAPI:
     async def api_delete_scan(
         scan_id: str, _: None = Depends(require_session)
     ) -> dict[str, Any]:
+        """Forget a run and delete its stored reports."""
         run = runs.pop(scan_id, None)
         if run and run.task and not run.task.done():
             run.task.cancel()
@@ -1080,6 +1108,7 @@ def create_app(settings: AppSettings | None = None) -> FastAPI:
 
     @app.post("/api/ask/reset")
     async def api_ask_reset(request: Request) -> dict[str, Any]:
+        """Clear the conversation held for this session."""
         if not _signed_in(request):
             raise HTTPException(status_code=401, detail="sign in to use the dashboard")
         token = _token(request) or "anonymous"
@@ -1155,12 +1184,14 @@ def create_app(settings: AppSettings | None = None) -> FastAPI:
         pull.error = ""
 
         def report(phase: str, done: int, total: int) -> None:
+            """Record download progress for the status endpoint."""
             pull.phase = phase
             pull.done_bytes = done
             if total > 0:
                 pull.total_bytes = total
 
         async def fetch() -> None:
+            """Download the model off the event loop; never on request."""
             try:
                 path = await asyncio.to_thread(
                     model_catalog.download_model,
@@ -1192,6 +1223,7 @@ def create_app(settings: AppSettings | None = None) -> FastAPI:
 
     @app.get("/api/models/pull")
     async def api_model_pull_status(request: Request) -> dict[str, Any]:
+        """Progress of a model download in flight."""
         if not _signed_in(request):
             raise HTTPException(status_code=401, detail="sign in to use the dashboard")
         return pull.to_dict()
@@ -1245,6 +1277,7 @@ def create_app(settings: AppSettings | None = None) -> FastAPI:
     # -- watchlist (vault) -----------------------------------------------
     @app.get("/api/vault")
     async def api_vault(_: None = Depends(require_vault)) -> dict[str, Any]:
+        """Vault summary: what is watched and what the last check found."""
         assert settings.vault is not None
         return _vault_summary() or {}
 
@@ -1252,6 +1285,7 @@ def create_app(settings: AppSettings | None = None) -> FastAPI:
     async def api_vault_add(
         payload: VaultEntryRequest, _: None = Depends(require_vault)
     ) -> JSONResponse:
+        """Add an identifier to the watchlist."""
         assert settings.vault is not None
         try:
             entry, created = settings.vault.add(
@@ -1289,6 +1323,7 @@ def create_app(settings: AppSettings | None = None) -> FastAPI:
     async def api_vault_delete(
         entry_id: str, _: None = Depends(require_vault)
     ) -> dict[str, Any]:
+        """Remove an identifier from the watchlist."""
         assert settings.vault is not None
         removed = settings.vault.remove(entry_id)
         if not removed:
@@ -1369,10 +1404,15 @@ def create_app(settings: AppSettings | None = None) -> FastAPI:
 
     @app.get("/api/breach")
     async def api_breach(_: None = Depends(require_vault)) -> dict[str, Any]:
+        """The current breach-watch state."""
         return breach.to_dict()
 
     @app.post("/api/breach/check")
     async def api_breach_check(_: None = Depends(require_vault)) -> dict[str, Any]:
+        """Start a manual breach check.
+
+        Manual runs are unrestricted by design: the local-only rule exists for
+        runs that fire on their own, not for runs the user asked for."""
         started = _start_breach_run("manual")
         return JSONResponse(
             {"started": started, "status": breach.status}, status_code=202 if started else 200

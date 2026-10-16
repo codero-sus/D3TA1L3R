@@ -140,5 +140,5 @@ class RobotsPolicy:
         return rules.crawl_delay if rules else None
 
     def known_origins(self) -> list[str]:  # pragma: no cover - diagnostics
-        return sorted(self._cache)
         """Origins whose robots.txt has been fetched; diagnostics only."""
+        return sorted(self._cache)

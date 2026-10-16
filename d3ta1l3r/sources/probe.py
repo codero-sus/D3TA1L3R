@@ -119,10 +119,15 @@ class SiteSpec:
             raise ConfigError(f"site spec {self.id!r}: url must be absolute http(s)")
 
     def profile_url(self, identifier: str) -> str:
+        """The profile URL for ``identifier``, quoted so a handle cannot alter the path."""
         return self.url.format(**{self.kind.value: quote(identifier, safe="")})
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> SiteSpec:
+        """Build a site spec from the catalogue.
+
+        Raises:
+            ConfigError: if the entry carries an unknown field."""
         known = set(cls.__dataclass_fields__)  # type: ignore[attr-defined]
         unknown = set(data) - known
         if unknown:
@@ -161,9 +166,11 @@ class UsernameProbeSource(BaseSource):
         )
 
     def query_url(self, identifier: str) -> str:
+        """The URL this probe requests."""
         return self.spec.profile_url(identifier)
 
     async def run(self, identifier: str, target: ScanTarget) -> SourceOutcome:
+        """Fetch the profile URL and classify what came back."""
         started = time.perf_counter()
         url = self.spec.profile_url(identifier)
         response = await self.http.fetch(url, accept=_ACCEPT_HTML)
@@ -176,6 +183,7 @@ class UsernameProbeSource(BaseSource):
             error: str | None = None,
             skipped_reason: str | None = None,
         ) -> SourceOutcome:
+            """Build the outcome for this probe."""
             return self._outcome(
                 status,
                 started,

@@ -73,22 +73,27 @@ class BaseSource(ABC):
     # -- identity --------------------------------------------------------
     @property
     def id(self) -> str:
+        """Stable identifier for this source."""
         return self.meta.id
 
     @property
     def name(self) -> str:
+        """Human-readable name."""
         return self.meta.name
 
     @property
     def kind(self) -> SourceKind:
+        """The kind of identifier this source asks about."""
         return self.meta.kind
 
     @property
     def category(self) -> str:
+        """Grouping used in reports and in the source inventory."""
         return self.meta.category
 
     @property
     def enabled_by_default(self) -> bool:
+        """Whether a default scan includes this source."""
         return self.meta.enabled_by_default
 
     def __repr__(self) -> str:  # pragma: no cover - debugging aid
@@ -96,13 +101,19 @@ class BaseSource(ABC):
 
     # -- lifecycle -------------------------------------------------------
     def bind(self, fetcher: Fetcher) -> BaseSource:
+        """Attach a fetcher and return self, so sources can be bound in a comprehension."""
         self.fetcher = fetcher
         return self
 
     def identifier_for(self, target: ScanTarget) -> str | None:
+        """This source's identifier from the target, or None if it was not supplied."""
         return target.identifiers.get(self.kind.value)
 
     def applies_to(self, target: ScanTarget) -> bool:
+        """Whether the target supplies the identifier this source needs.
+
+        A source that does not apply is skipped rather than run: it has nothing
+        to ask about, and running it would pad the source count with noise."""
         return self.identifier_for(target) is not None
 
     def query_url(self, identifier: str) -> str | None:
@@ -116,6 +127,10 @@ class BaseSource(ABC):
 
     @property
     def http(self) -> Fetcher:
+        """The bound fetcher.
+
+        Raises:
+            RuntimeError: if the source was never bound."""
         if self.fetcher is None:  # pragma: no cover - programming error
             raise RuntimeError(f"source {self.id} is not bound to a Fetcher")
         return self.fetcher
@@ -225,6 +240,7 @@ class BaseSource(ABC):
         account_created_at: str | None = None,
         extra: dict[str, object] | None = None,
     ) -> Finding:
+        """Build a finding attributed to this source."""
         return Finding(
             source_id=self.id,
             source_name=self.name,
