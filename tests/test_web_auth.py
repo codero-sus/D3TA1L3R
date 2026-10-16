@@ -835,3 +835,25 @@ class TestBreachRunsAfterAScan:
                 for check in entry["checks"]
             ]
             assert "pwned" in statuses, payload["report"]
+
+
+class TestValidationReachesTheDashboard:
+    """A malformed identifier must be a 4xx, never a traceback.
+
+    These validators are the safety boundary, and the dashboard is the place a
+    wrong type is most likely to arrive: a JSON body can carry a number, a list
+    or a null where a string was expected.
+    """
+
+    @pytest.mark.parametrize("bad", [123, ["alice"], None, 4.5, {"v": "alice"}])
+    def test_a_non_string_value_is_rejected_cleanly(self, tmp_path: Path, bad) -> None:
+        client, _settings, _vault = build_app(tmp_path)
+        with client:
+            sign_in(client)
+            response = client.post(
+                "/api/vault/entries",
+                json={"kind": "email", "value": bad, "check_now": False},
+            )
+            assert response.status_code < 500, (
+                f"a bad type must not become a server error: {response.text[:200]}"
+            )

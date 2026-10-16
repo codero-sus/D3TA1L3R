@@ -8,12 +8,18 @@ from d3ta1l3r.core.security import (
     assert_public_url,
     is_public_host,
     mask_email,
+    mask_phone,
+    normalise_phone,
+    redact,
     registrable_domain,
     render_template,
+    validate_category,
     validate_domain,
     validate_email,
     validate_location,
     validate_name,
+    validate_phone,
+    validate_source_id,
     validate_template,
     validate_username,
 )
@@ -151,3 +157,108 @@ class TestSsrfGuard:
         # 'resolve=True' must not accept a host that cannot resolve publicly.
         with pytest.raises(ForbiddenTargetError):
             assert_public_url("https://this-host-does-not-exist-8f3a9b.invalid/", resolve=True)
+
+
+class TestValidationRejectsWrongTypes:
+    """A non-string identifier must be a usage error, not a TypeError.
+
+    Identifiers reach these functions from JSON bodies and from argparse, where
+    a list or a number is entirely possible. Crashing with a TypeError there
+    would surface as a traceback instead of a message.
+    """
+
+    @pytest.mark.parametrize("bad", [None, 123, ["alice"], {"a": 1}, 4.5])
+    def test_username(self, bad: object) -> None:
+        with pytest.raises(UsageError):
+            validate_username(bad)
+
+    @pytest.mark.parametrize("bad", [None, 123, ["a@b.com"]])
+    def test_email(self, bad: object) -> None:
+        with pytest.raises(UsageError):
+            validate_email(bad)
+
+    @pytest.mark.parametrize("bad", [None, 123, ["+14155550123"]])
+    def test_phone(self, bad: object) -> None:
+        with pytest.raises(UsageError):
+            validate_phone(bad)
+
+
+class TestSourceIdAndCategoryValidation:
+    def test_a_slug_is_normalised(self) -> None:
+        assert validate_source_id("  GitHub_User ") == "github_user"
+        assert validate_category("  Social ") == "social"
+
+    @pytest.mark.parametrize("bad", ["", "has space", "Upper!", "a/b", "../etc", "-lead", "trail-"])
+    def test_anything_that_is_not_a_slug_is_rejected(self, bad: str) -> None:
+        with pytest.raises(UsageError):
+            validate_source_id(bad)
+        with pytest.raises(UsageError):
+            validate_category(bad)
+
+
+class TestRenderTemplate:
+    def test_an_unknown_placeholder_is_an_error_not_a_crash(self) -> None:
+        with pytest.raises(UsageError):
+            render_template("{nope}", username="alice")
+
+    def test_an_unbalanced_brace_is_rejected(self) -> None:
+        with pytest.raises(UsageError):
+            validate_template("{username", "alice")
+
+
+class TestPhoneNumbers:
+    def test_normalise_strips_separators(self) -> None:
+        assert normalise_phone("+1 (415) 555-0123") == "+14155550123"
+        assert normalise_phone("+44 20 7946 0958") == "+442079460958"
+
+    def test_a_number_longer_than_e164_allows_is_rejected(self) -> None:
+        with pytest.raises(UsageError):
+            validate_phone("+" + "1" * 20)
+
+    def test_masking_leaves_at_most_the_country_code(self) -> None:
+        masked = mask_phone("+14155550123")
+        assert "0123" not in masked, "the subscriber number must not survive masking"
+        assert masked.startswith("+")
+
+    def test_a_value_too_short_to_mask_is_fully_hidden(self) -> None:
+        assert mask_phone("1") == "***"
+        assert mask_phone("") == "***"
+
+
+class TestRedaction:
+    """redact() is for messages that may be logged: it masks email-shaped text.
+
+    It is deliberately not a general masker — a value that is not an email is
+    left alone rather than shredded, because a log line reading "su***" is
+    useless for debugging and a secret is usually not what is being passed in.
+    """
+
+    def test_an_empty_value_stays_empty(self) -> None:
+        assert redact("") == ""
+
+    def test_the_local_part_of_an_email_is_masked(self) -> None:
+        redacted = redact("alice@example.com")
+        assert "alice" not in redacted
+        assert "example.com" in redacted, "the domain is what makes a log line useful"
+
+    def test_a_non_email_value_is_left_alone(self) -> None:
+        assert redact("supersecretvalue") == "supersecretvalue"
+
+    def test_every_email_in_a_message_is_masked(self) -> None:
+        redacted = redact("failed for alice@example.com and bob@example.org")
+        assert "alice@" not in redacted
+        assert "bob@" not in redacted
+
+
+class TestPublicUrlGuard:
+    def test_a_url_with_no_host_is_refused(self) -> None:
+        with pytest.raises(ForbiddenTargetError):
+            assert_public_url("http:///path")
+
+    def test_a_non_http_scheme_is_refused(self) -> None:
+        with pytest.raises(ForbiddenTargetError):
+            assert_public_url("file:///etc/passwd")
+
+    def test_an_ipv6_literal_is_classified(self) -> None:
+        # loopback ::1 is not a public host
+        assert is_public_host("::1") is False

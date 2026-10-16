@@ -84,6 +84,19 @@ _BLOCKED_EXACT = {
 # ---------------------------------------------------------------------------
 # identifier validation
 # ---------------------------------------------------------------------------
+def _require_text(value: object, what: str) -> str:
+    """Reject a non-string identifier with a message rather than a traceback.
+
+    Identifiers arrive from JSON request bodies and from argparse, where a
+    number, a list or a null is entirely possible. Without this, ``value.strip()``
+    raises AttributeError and the user gets a stack trace instead of a usage
+    message — and on the dashboard, a 500 instead of a 400.
+    """
+    if not isinstance(value, str):
+        raise UsageError(f"{what} must be a string")
+    return value
+
+
 def validate_username(value: str) -> str:
     """Normalise and validate a handle.
 
@@ -91,9 +104,7 @@ def validate_username(value: str) -> str:
     rejects anything containing characters that could escape a URL path or
     smuggle extra parameters.
     """
-    if not isinstance(value, str):
-        raise UsageError("username must be a string")
-    handle = value.strip()
+    handle = _require_text(value, "username").strip()
     if handle.startswith("@"):
         handle = handle[1:]
     if not handle:
@@ -118,7 +129,7 @@ def validate_username(value: str) -> str:
 
 def validate_email(value: str) -> str:
     """Validate an email address; the local part is never treated as a handle."""
-    email = value.strip().lower()
+    email = _require_text(value, "email").strip().lower()
     if len(email) > 254:
         raise UsageError("email is longer than 254 characters")
     if not EMAIL_RE.match(email):
@@ -131,7 +142,7 @@ def validate_email(value: str) -> str:
 
 def validate_name(value: str) -> str:
     """Validate a personal name used for name-based lookups (never a person list)."""
-    name = " ".join(value.split())
+    name = " ".join(_require_text(value, "name").split())
     if len(name) < 2:
         raise UsageError("name is too short")
     if len(name) > 80:
@@ -145,7 +156,7 @@ def validate_name(value: str) -> str:
 
 def validate_location(value: str) -> str:
     """Validate a coarse location hint such as ``Delhi, IN``."""
-    location = " ".join(value.split())
+    location = " ".join(_require_text(value, "location").split())
     if not 1 < len(location) <= 80:
         raise UsageError("location must be between 2 and 80 characters")
     if not LOCATION_RE.match(location):
@@ -155,7 +166,7 @@ def validate_location(value: str) -> str:
 
 def validate_domain(value: str) -> str:
     """Validate a domain the operator owns, for the RDAP registration check."""
-    candidate = value.strip().lower()
+    candidate = _require_text(value, "domain").strip().lower()
     if "://" in candidate:  # tolerate a pasted URL
         candidate = urlsplit(candidate).hostname or ""
     candidate = candidate.strip().rstrip(".")
@@ -178,7 +189,7 @@ def validate_source_id(value: str) -> str:
 
         Raises:
             UsageError: if the id is not a lowercase slug."""
-    source_id = value.strip().lower()
+    source_id = _require_text(value, "source id").strip().lower()
     if not SOURCE_ID_RE.match(source_id):
         raise UsageError(f"invalid source id {value!r}")
     return source_id
@@ -189,7 +200,7 @@ def validate_category(value: str) -> str:
 
         Raises:
             UsageError: if the category is not a lowercase slug."""
-    category = value.strip().lower()
+    category = _require_text(value, "category").strip().lower()
     if not SOURCE_ID_RE.match(category):
         raise UsageError(f"invalid category {value!r}")
     return category
