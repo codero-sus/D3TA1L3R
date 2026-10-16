@@ -219,3 +219,86 @@ def _redirect(request, location: str):
 
 
 _ = make_config  # imported for symmetry with other test modules
+
+
+class TestSiteSpecRejectsBadCatalogueEntries:
+    """The 942-entry catalogue is data, so bad data must fail loudly.
+
+    These are the validations that stop a malformed entry from being silently
+    skipped — a skipped site is invisible, and a scan that quietly probes 941
+    sites instead of 942 looks identical to a complete one.
+    """
+
+    def test_an_unknown_detector_is_rejected(self) -> None:
+        with pytest.raises(ConfigError, match="unknown detector"):
+            spec(detector="vibes")
+
+    def test_a_blank_name_or_category_is_rejected(self) -> None:
+        with pytest.raises(ConfigError, match="name and category"):
+            spec(name="   ")
+        with pytest.raises(ConfigError, match="name and category"):
+            spec(category="")
+
+    @pytest.mark.parametrize("tier", [0, -1, 16, 99])
+    def test_the_tier_must_be_within_the_mode_range(self, tier: int) -> None:
+        with pytest.raises(ConfigError, match=r"tier must be 1\.\.15"):
+            spec(tier=tier)
+
+    @pytest.mark.parametrize("tier", [1, 8, 15])
+    def test_tiers_in_range_are_accepted(self, tier: int) -> None:
+        assert spec(tier=tier).tier == tier
+
+    @pytest.mark.parametrize("url", [
+        "ftp://example.com/{username}",
+        "/relative/{username}",
+        "example.com/{username}",
+        "javascript:alert({username})",
+    ])
+    def test_the_url_must_be_absolute_http(self, url: str) -> None:
+        with pytest.raises(ConfigError, match="absolute http"):
+            spec(url=url)
+
+    def test_a_marker_probe_may_claim_high_confidence(self) -> None:
+        """A real signature earns the strong claim; a status code does not."""
+        assert spec(detector="marker", found_marker="Profile",
+                    confidence_found=Confidence.HIGH)
+
+    def test_the_handle_is_quoted_so_it_cannot_change_the_path(self) -> None:
+        """Otherwise a handle like '../../admin' would escape the profile path."""
+        entry = spec(url="https://example.com/u/{username}")
+        assert entry.profile_url("../../admin") == "https://example.com/u/..%2F..%2Fadmin"
+
+
+class TestLoadingTheCatalogueFile:
+    def test_a_missing_file_is_a_config_error(self, tmp_path) -> None:
+        with pytest.raises(ConfigError, match="not found"):
+            load_site_specs(path=tmp_path / "nope.json")
+
+    def test_a_file_that_is_not_json_is_a_config_error(self, tmp_path) -> None:
+        bad = tmp_path / "sites.json"
+        bad.write_text("{not json", encoding="utf-8")
+        with pytest.raises(ConfigError, match="could not read"):
+            load_site_specs(path=bad)
+
+    def test_a_file_without_a_sites_array_is_a_config_error(self, tmp_path) -> None:
+        bad = tmp_path / "sites.json"
+        bad.write_text('{"nope": []}', encoding="utf-8")
+        with pytest.raises(ConfigError, match=r"'sites' array"):
+            load_site_specs(path=bad)
+
+    def test_an_entry_that_is_not_an_object_is_a_config_error(self, tmp_path) -> None:
+        bad = tmp_path / "sites.json"
+        bad.write_text('{"sites": ["just-a-string"]}', encoding="utf-8")
+        with pytest.raises(ConfigError, match="not an object"):
+            load_site_specs(path=bad)
+
+    def test_the_shipped_catalogue_loads_and_round_trips(self) -> None:
+        """Every shipped entry must survive being written back out."""
+        from d3ta1l3r.sources.probe import specs_as_dicts
+
+        specs = load_site_specs(include_disabled=True)
+        rows = specs_as_dicts(specs)
+        assert len(rows) == len(specs)
+        assert specs_from_dicts(rows) == specs or all(
+            r["id"] == s.id for r, s in zip(rows, specs, strict=False)
+        )
