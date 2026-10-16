@@ -47,6 +47,13 @@ from d3ta1l3r.llm.backends import (
     is_loopback_host,
 )
 from d3ta1l3r.llm.context import scrub_text
+from d3ta1l3r.llm.models import (
+    format_bytes,
+    format_mb,
+    load_custom_models,
+    spec_from_reference,
+    total_size_mb,
+)
 from d3ta1l3r.models import (
     Confidence,
     Finding,
@@ -642,3 +649,76 @@ class TestBackendsExplainThemselves:
             lambda r: httpx.Response(200, json={"models": [{"name": "llama3.2:1b"}]})
         )
         assert backend.describe()["local_only"] is True
+
+
+class TestModelReferences:
+    """Model downloads are user-initiated, so a bad reference must be a message.
+
+    These run before anything is fetched: the tool is supposed to size a
+    download and show it to the user before a single byte arrives, which means
+    parsing has to fail loudly and early rather than mid-download.
+    """
+
+    def test_a_full_reference_parses(self) -> None:
+        spec = spec_from_reference("TheBloke/dolphin-2.9-llama3-8b-GGUF/model.Q4_K_M.gguf")
+        assert spec.repo == "TheBloke/dolphin-2.9-llama3-8b-GGUF"
+        assert spec.filename == "model.Q4_K_M.gguf"
+
+    def test_a_bare_filename_is_rejected_with_an_example(self) -> None:
+        with pytest.raises(UsageError, match=r"REPO/FILE\.gguf"):
+            spec_from_reference("model.gguf")
+
+    def test_two_parts_without_a_gguf_suffix_is_rejected(self) -> None:
+        """owner/name is a repository, not a file; say which is missing."""
+        with pytest.raises(UsageError, match=r"REPO/FILE\.gguf"):
+            spec_from_reference("TheBloke/dolphin-2.9-llama3-8b-GGUF")
+
+    def test_something_that_is_not_a_repository_is_rejected(self) -> None:
+        with pytest.raises(UsageError, match=r"(?i)repository"):
+            spec_from_reference("a/b/c/model.gguf", repo="notarepo", filename="model.gguf")
+
+    def test_a_non_gguf_filename_is_rejected(self) -> None:
+        with pytest.raises(UsageError, match=r"\.gguf"):
+            spec_from_reference("owner/repo/model.bin", filename="model.bin")
+
+    def test_a_missing_filename_is_rejected(self) -> None:
+        with pytest.raises(UsageError, match=r"(?i)filename is required"):
+            spec_from_reference("owner/repo", repo="owner/repo")
+
+
+class TestCustomCatalogue:
+    def test_a_catalogue_that_is_not_a_list_is_rejected(self, tmp_path: Path) -> None:
+        (tmp_path / "catalog.json").write_text('{"models": {}}', encoding="utf-8")
+        with pytest.raises(UsageError, match=r"list of models"):
+            load_custom_models(tmp_path)
+
+    def test_an_entry_this_code_cannot_read_names_itself(self, tmp_path: Path) -> None:
+        (tmp_path / "catalog.json").write_text(
+            '[{"id": "x", "ram_mb": "not-a-number"}]', encoding="utf-8"
+        )
+        with pytest.raises(UsageError, match=r"cannot read"):
+            load_custom_models(tmp_path)
+
+    def test_a_missing_catalogue_is_empty_not_an_error(self, tmp_path: Path) -> None:
+        assert load_custom_models(tmp_path) == ()
+
+
+class TestFormatting:
+    @pytest.mark.parametrize("count,expected", [
+        (0, "0 B"),
+        (512, "512 B"),
+        (2048, "2.0 KiB"),
+        (5 * 1024 * 1024, "5.0 MiB"),
+        (3 * 1024 * 1024 * 1024, "3.0 GiB"),
+    ])
+    def test_format_bytes(self, count: int, expected: str) -> None:
+        assert format_bytes(count) == expected
+
+    def test_format_mb_switches_to_gigabytes(self) -> None:
+        assert format_mb(512) == "512 MB"
+        assert format_mb(2048) == "2.0 GB"
+
+    def test_total_size_sums_the_catalogue(self) -> None:
+        class _Spec:
+            size_mb = 100
+        assert total_size_mb([_Spec(), _Spec(), _Spec()]) == 300
