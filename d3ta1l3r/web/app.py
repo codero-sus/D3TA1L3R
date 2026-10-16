@@ -497,6 +497,7 @@ def create_app(settings: AppSettings | None = None) -> FastAPI:
             "breach_corpus_dirs": [str(path) for path in settings.breach_config.corpora],
             "breach_search_terms": list(settings.breach_config.search_terms),
             "breach_recursive": settings.breach_config.recursive_corpus,
+            "breach_exhaustive": settings.breach_config.exhaustive,
             "default_mode": settings.config.mode,
             "modes": summarise(load_site_specs()),
             "llm_backends": [
@@ -1355,11 +1356,13 @@ def create_app(settings: AppSettings | None = None) -> FastAPI:
             corpora=corpora,
             search_terms=terms,
             recursive_corpus=bool(body.get("recursive")),
+            exhaustive=bool(body.get("exhaustive")),
         )
         return {
             "corpora": [str(path) for path in corpora],
             "search_terms": list(terms),
             "recursive": settings.breach_config.recursive_corpus,
+            "exhaustive": settings.breach_config.exhaustive,
             "persisted": False,
             "note": "held in memory for this session; search terms are never written to disk",
         }

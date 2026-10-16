@@ -198,6 +198,13 @@
                  {% if breach_recursive %}checked{% endif %}>
           Search sub-folders too
         </label>
+        <label class="check">
+          <input type="checkbox" id="corpus-exhaustive" name="exhaustive"
+                 {% if breach_exhaustive %}checked{% endif %}>
+          Exhaustive — ask every source about every entry
+          <span class="hint">(records the pairs that cannot be checked, so nothing is
+          left unmentioned; never reports a gap as clean)</span>
+        </label>
         <div class="actions">
           <button id="leak-search-save" type="button">Apply and re-check</button>
           <span class="status" id="leak-search-status"></span>
