@@ -857,3 +857,50 @@ class TestValidationReachesTheDashboard:
             assert response.status_code < 500, (
                 f"a bad type must not become a server error: {response.text[:200]}"
             )
+
+
+class TestDashboardErrorSurfaces:
+    """What the user gets back when something goes wrong.
+
+    A dashboard that answers 500 with a traceback leaks internals and gives the
+    user nothing to act on. These are the boundaries where a failure has to
+    become a status code and a sentence.
+    """
+
+    def test_an_unknown_scan_is_a_404_not_a_crash(self, tmp_path: Path) -> None:
+        client, _settings, _vault = build_app(tmp_path)
+        with client:
+            sign_in(client)
+            response = client.get("/api/scans/does-not-exist")
+            assert response.status_code == 404
+
+    def test_an_unknown_report_is_a_404(self, tmp_path: Path) -> None:
+        client, _settings, _vault = build_app(tmp_path)
+        with client:
+            sign_in(client)
+            response = client.get("/api/scans/does-not-exist/report.json")
+            assert response.status_code == 404
+
+    def test_the_event_stream_needs_a_session(self, tmp_path: Path) -> None:
+        client, _settings, _vault = build_app(tmp_path)
+        with client:
+            response = client.get("/api/scans/whatever/events")
+            assert response.status_code in {401, 403}, response.status_code
+
+    def test_an_invalid_identifier_is_a_400_not_a_500(self, tmp_path: Path) -> None:
+        client, _settings, _vault = build_app(tmp_path)
+        with client:
+            sign_in(client)
+            response = client.post(
+                "/api/vault/entries",
+                json={"kind": "email", "value": "not an email at all", "check_now": False},
+            )
+            assert response.status_code == 400, response.text[:200]
+            assert "detail" in response.json()
+
+    def test_deleting_an_unknown_scan_is_harmless(self, tmp_path: Path) -> None:
+        client, _settings, _vault = build_app(tmp_path)
+        with client:
+            sign_in(client)
+            response = client.delete("/api/scans/does-not-exist")
+            assert response.status_code < 500
