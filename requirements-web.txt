@@ -1,0 +1,7 @@
+# Extra dependencies for the optional web dashboard (`d3ta1l3r web`).
+-r requirements.txt
+fastapi>=0.110
+uvicorn[standard]>=0.29
+jinja2>=3.1
+# Starlette parses the login form with it.
+python-multipart>=0.0.9
