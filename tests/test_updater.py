@@ -676,3 +676,92 @@ class TestBranchResolution:
         repo = tmp_path / "repo"
         (repo / ".git").mkdir(parents=True)
         assert current_branch(repo) == ""
+
+
+class TestUpdaterDegradesGracefully:
+    """Every way the update check can fail, and what the user sees instead.
+
+    An update check is optional and happens in the background of someone
+    wanting to get work done. Losing the network, hitting a rate limit or
+    not having git installed must each produce a sentence, not a traceback —
+    and must never be mistaken for "you are up to date".
+    """
+
+    def _stub_head(self, monkeypatch: pytest.MonkeyPatch, head: str) -> None:
+        monkeypatch.setattr("d3ta1l3r.updater.local_head", lambda root=None: head)
+
+    def test_a_rate_limit_is_explained_not_swallowed(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """60 req/hour unauthenticated is easy to hit; say so and suggest git."""
+        self._stub_head(monkeypatch, "a" * 40)
+        transport = _commits_transport([], status=403, text="rate limited")
+        info = check_branch_updates("dev", transport=transport, package_root=Path("/tmp"))
+        assert info.available is False
+        assert info.reachable is False
+        assert "rate" in info.message.lower()
+        assert "git fetch" in info.message, "the user needs a way forward"
+
+    def test_an_unexpected_status_is_reported(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        self._stub_head(monkeypatch, "a" * 40)
+        transport = _commits_transport([], status=500, text="boom")
+        info = check_branch_updates("dev", transport=transport, package_root=Path("/tmp"))
+        assert info.available is False
+        assert "500" in info.message
+
+    def test_a_body_that_is_not_json_is_reported(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        self._stub_head(monkeypatch, "a" * 40)
+        transport = _commits_transport([], status=200, text="<html>not json</html>")
+        info = check_branch_updates("dev", transport=transport, package_root=Path("/tmp"))
+        assert info.available is False
+        assert "json" in info.message.lower()
+
+    def test_an_empty_commit_list_says_so(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        self._stub_head(monkeypatch, "a" * 40)
+        transport = _commits_transport([], status=200, payload=[])
+        info = check_branch_updates("dev", transport=transport, package_root=Path("/tmp"))
+        assert info.available is False
+        assert "no commits" in info.message.lower()
+
+    def test_a_body_that_is_not_a_list_is_reported(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        self._stub_head(monkeypatch, "a" * 40)
+        transport = _commits_transport([], status=200, payload={"message": "Not Found"})
+        info = check_branch_updates("dev", transport=transport, package_root=Path("/tmp"))
+        assert info.available is False
+        assert info.reachable is False
+
+    def test_git_missing_is_not_an_error(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """No git installed simply means we cannot tell; it must not crash."""
+        monkeypatch.setattr(
+            "d3ta1l3r.updater.subprocess.run",
+            lambda *a, **k: (_ for _ in ()).throw(OSError("not found")),
+        )
+        assert current_branch(Path("/tmp")) == ""
+
+    def test_a_release_api_failure_is_reported(self) -> None:
+        transport = httpx.MockTransport(
+            lambda request: httpx.Response(503, text="unavailable")
+        )
+        info = check_for_update(transport=transport)
+        assert info.available is False
+        assert info.reachable is False
+        assert "503" in info.message
+
+    def test_a_release_api_sending_the_wrong_shape_is_reported(self) -> None:
+        transport = httpx.MockTransport(
+            lambda request: httpx.Response(200, json=[1, 2, 3])
+        )
+        info = check_for_update(transport=transport)
+        assert info.available is False
+        assert "shape" in info.message.lower()
+
+    def test_a_release_with_no_version_tag_is_not_an_update(self) -> None:
+        """A 200 that carries no usable tag is a gap, not "you are current"."""
+        transport = httpx.MockTransport(
+            lambda request: httpx.Response(200, json={"unexpected": True})
+        )
+        info = check_for_update(transport=transport)
+        assert info.available is False
+        assert info.latest == ""
