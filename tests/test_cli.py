@@ -16,6 +16,8 @@ from d3ta1l3r.cli import (
     EXIT_OK,
     EXIT_USAGE,
     _calibration_row,
+    _config_from_args,
+    _Console,
     _infer_kind,
     _split_values,
     _write_reports,
@@ -24,7 +26,16 @@ from d3ta1l3r.cli import (
 )
 from d3ta1l3r.core.report import render_json
 from d3ta1l3r.core.storage import ScanStore
-from d3ta1l3r.models import Confidence, ScanReport, ScanStatus, ScanTarget, SourceKind
+from d3ta1l3r.models import (
+    EVENT_SCAN_FINISHED,
+    EVENT_SOURCE_FINISHED,
+    Confidence,
+    ScanEvent,
+    ScanReport,
+    ScanStatus,
+    ScanTarget,
+    SourceKind,
+)
 from d3ta1l3r.vault import Vault, VaultKind
 
 
@@ -796,3 +807,94 @@ def _fake_report(username: str, findings: int) -> ScanReport:
 
 
 _ = Path
+
+
+class TestPhrasesCommand:
+    """`d3ta1l3r sources --phrases` shows the wording detection depends on."""
+
+    def test_it_lists_both_kinds_of_phrase(self, capsys) -> None:
+        assert main(["sources", "--not-found-phrases"]) == EXIT_OK
+        out = capsys.readouterr().out
+        assert 'mean "no such account"' in out
+        assert "Ambiguous wording" in out
+
+    def test_the_json_form_has_the_same_keys(self, capsys) -> None:
+        assert main(["sources", "--not-found-phrases", "--json"]) == EXIT_OK
+        registry = json.loads(capsys.readouterr().out)
+        assert "absent" in registry
+        assert "ambiguous" in registry
+
+    def test_absent_and_ambiguous_do_not_overlap(self, capsys) -> None:
+        """A phrase cannot both prove absence and be ambiguous."""
+        assert main(["sources", "--not-found-phrases", "--json"]) == EXIT_OK
+        registry = json.loads(capsys.readouterr().out)
+        assert not set(registry["absent"]) & set(registry["ambiguous"])
+
+
+class TestRateLimitOverride:
+    def _rate(self, argv: list[str]):
+        return _config_from_args(build_parser().parse_args(argv)).rate
+
+    def test_rps_sets_both_the_rate_and_the_burst(self) -> None:
+        rate = self._rate(["scan", "-u", "alice", "--rps", "5"])
+        assert rate.per_host_rps == 5
+        assert rate.per_host_burst == 5
+
+    def test_a_fractional_rate_still_gets_a_burst_of_one(self) -> None:
+        """Burst is a count, so half a request per second floors at one."""
+        rate = self._rate(["scan", "-u", "alice", "--rps", "0.25"])
+        assert rate.per_host_burst == 1
+
+    def test_no_flag_leaves_the_default_alone(self) -> None:
+        default = self._rate(["scan", "-u", "alice"])
+        assert default.per_host_rps != 5, "--rps must be what moved it"
+        assert default.per_host_burst == 4
+
+
+class TestProgressRenderer:
+    """_Console draws a bar on a tty and stays out of the way off one."""
+
+    @staticmethod
+    def _event(event_type: str, completed: int, total: int, message: str) -> ScanEvent:
+        return ScanEvent(
+            type=event_type, scan_id="s1", message=message,
+            completed=completed, total=total,
+        )
+
+    def _console(self, **kwargs) -> _Console:
+        import io
+
+        class Tty(io.StringIO):
+            def isatty(self) -> bool:
+                return True
+
+        return _Console(stream=Tty(), **kwargs)
+
+    def test_a_tty_gets_a_bar_with_the_counts(self) -> None:
+        console = self._console()
+        console.event(self._event(EVENT_SOURCE_FINISHED, 30, 60, "checking github"))
+        out = console.stream.getvalue()
+        assert "█" in out or "░" in out
+        assert "30/60" in out
+
+    def test_quiet_suppresses_everything(self) -> None:
+        console = self._console(quiet=True)
+        console.event(self._event(EVENT_SOURCE_FINISHED, 1, 2, "checking github"))
+        assert console.stream.getvalue() == ""
+
+    def test_non_tty_writes_nothing_rather_than_noise(self) -> None:
+        import io
+
+        console = _Console(stream=io.StringIO())
+        console.event(self._event(EVENT_SOURCE_FINISHED, 1, 2, "checking github"))
+        assert console.stream.getvalue() == ""
+
+    def test_notes_and_events_survive_verbose(self) -> None:
+        console = self._console(verbose=True)
+        console.event(self._event(EVENT_SOURCE_FINISHED, 1, 2, "checking github"))
+        assert "checking github" in console.stream.getvalue()
+
+    def test_a_finished_scan_ends_the_bar_line(self) -> None:
+        console = self._console()
+        console.event(self._event(EVENT_SCAN_FINISHED, 60, 60, "done"))
+        assert console.stream.getvalue().endswith("\n")
