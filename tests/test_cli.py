@@ -16,6 +16,7 @@ from d3ta1l3r.cli import (
     EXIT_OK,
     EXIT_USAGE,
     _calibration_row,
+    _infer_kind,
     _split_values,
     _write_reports,
     build_parser,
@@ -24,7 +25,7 @@ from d3ta1l3r.cli import (
 from d3ta1l3r.core.report import render_json
 from d3ta1l3r.core.storage import ScanStore
 from d3ta1l3r.models import Confidence, ScanReport, ScanStatus, ScanTarget, SourceKind
-from d3ta1l3r.vault import Vault
+from d3ta1l3r.vault import Vault, VaultKind
 
 
 class TestValueSplitting:
@@ -469,6 +470,52 @@ class TestCalibrate:
         for handle in made[0].calls:
             assert handle.startswith("zzq"), handle
             assert len(handle) > 10, handle
+
+
+class TestInferKind:
+    """What `breach check <value>` decides you meant.
+
+    Guessing wrong here is not cosmetic: it picks the source and therefore what
+    leaves the machine. A phone number read as a username would be checked
+    against the wrong thing entirely.
+    """
+
+    @pytest.mark.parametrize("value,expected", [
+        ("alice@example.com", VaultKind.EMAIL),
+        ("ALICE@EXAMPLE.COM", VaultKind.EMAIL),
+        ("+14155550123", VaultKind.PHONE),
+        ("+44 20 7946 0958", VaultKind.PHONE),
+        ("9810000010", VaultKind.PHONE),
+        ("a" * 40, VaultKind.PASSWORD),          # a SHA-1 hex digest
+        ("5BAA6" + "1" * 35, VaultKind.PASSWORD),
+        ("alice_dev", VaultKind.USERNAME),
+        ("alice", VaultKind.USERNAME),
+    ])
+    def test_inference(self, value: str, expected: VaultKind) -> None:
+        assert _infer_kind(value) is expected
+
+    def test_an_empty_value_is_treated_as_a_password(self) -> None:
+        """`breach check` with no value prompts for a password; that is the default."""
+        assert _infer_kind("") is VaultKind.PASSWORD
+        assert _infer_kind(None) is VaultKind.PASSWORD
+
+    def test_a_domain_is_not_mistaken_for_an_email(self) -> None:
+        """No @ means no email, however much it looks like an address."""
+        assert _infer_kind("example.com") is VaultKind.USERNAME
+
+
+class TestModelsCommand:
+    def test_path_reports_where_models_would_go(self, capsys) -> None:
+        assert main(["models", "path"]) == EXIT_OK
+        out = capsys.readouterr().out
+        assert "models directory" in out
+        assert "D3TA1L3R_MODELS" in out
+
+    def test_path_json_is_machine_readable(self, capsys) -> None:
+        assert main(["models", "path", "--json"]) == EXIT_OK
+        payload = json.loads(capsys.readouterr().out)
+        assert "directory" in payload
+        assert "exists" in payload
 
 
 class TestWebServing:
