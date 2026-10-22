@@ -43,6 +43,7 @@ from ..models import (
 )
 from .cache import ResponseCache
 from .http import Fetcher
+from .parallel import recommended_workers, scan_sharded
 from .ratelimit import HostRateLimiter
 from .robots import RobotsPolicy
 
@@ -140,23 +141,59 @@ class ScanEngine:
 
         sink = on_event or self.on_event
         report = self._new_report(target, sources, available_kinds)
-        fetcher, cache = await self._open_fetcher(target)
-        try:
-            await self._emit(sink, self._event(report, EVENT_SCAN_STARTED,
-                                              f"scanning {len(sources)} sources"))
-            outcomes = await self._run_sources(sources, target, report, fetcher, sink)
-            report.outcomes = outcomes
-        finally:
-            await fetcher.close()
+
+        shards = self._use_parallel(sources)
+        cache_hits = 0
+        if shards:
+            # Every shard opens its own fetcher in its own process; the parent
+            # only merges. Stats come back from the workers so the report still
+            # records how many hosts and requests the scan really made.
+            await self._emit(
+                sink,
+                self._event(
+                    report,
+                    EVENT_SCAN_STARTED,
+                    f"scanning {len(sources)} sources across {shards + 1} processes",
+                ),
+            )
+            outcomes, shard_stats = await scan_sharded(
+                self.config,
+                sources,
+                target,
+                workers=shards,
+                on_event=self._shard_sink(sink, report, len(sources)),
+            )
+            hosts_contacted = shard_stats.get("hosts_contacted", 0)
+            http_requests = shard_stats.get("http_requests", 0)
+            cache_hits = shard_stats.get("cache_hits", 0)
+            for key in ("dns_lookups", "cache_hits", "shared_lookups"):
+                if shard_stats.get(key):
+                    report.options[f"dns_{key}"] = shard_stats[key]
+        else:
+            fetcher, cache = await self._open_fetcher(target)
+            try:
+                await self._emit(sink, self._event(report, EVENT_SCAN_STARTED,
+                                                  f"scanning {len(sources)} sources"))
+                outcomes = await self._run_sources(sources, target, report, fetcher, sink)
+                hosts_contacted = len(fetcher.hosts_contacted)
+                http_requests = fetcher.request_count
+                if cache is not None:
+                    cache_hits = cache.hits
+                if fetcher.host_guard.dns_lookups or fetcher.host_guard.cache_hits:
+                    report.options["dns_lookups"] = fetcher.host_guard.dns_lookups
+                    report.options["dns_cache_hits"] = fetcher.host_guard.cache_hits
+            finally:
+                await fetcher.close()
+        report.outcomes = outcomes
 
         report.finished_at = utcnow()
         report.warnings.extend(self._warnings(report))
         report.refresh_stats(
-            hosts_contacted=len(fetcher.hosts_contacted),
-            http_requests=fetcher.request_count,
+            hosts_contacted=hosts_contacted,
+            http_requests=http_requests,
         )
-        if cache is not None:
-            report.options["cache_hits"] = cache.hits
+        if cache_hits:
+            report.options["cache_hits"] = cache_hits
         await self._emit(
             sink,
             self._event(
@@ -170,7 +207,46 @@ class ScanEngine:
         self.last_report = report
         return report
 
-    # -- internals --------------------------------------------------------
+    # -- parallelism ------------------------------------------------------
+    def _use_parallel(self, sources: Sequence[Any]) -> int:
+        """How many *extra* processes to hand this scan to. ``0`` stays in-process.
+
+        An injected transport means the caller owns the network — the demo
+        transport and the test suite both do this — and neither survives being
+        pickled into a child, so those scans stay where they are.
+        """
+        if self._transport is not None or self.config.demo:
+            return 0
+        return recommended_workers(len(sources), self.config)
+
+    def _shard_sink(
+        self, sink: ProgressCallback | None, report: Any, total: int
+    ) -> Callable[[Any], None] | None:
+        """Translate shard results into the same progress events a local scan emits.
+
+        Workers cannot stream events back across the process boundary, so the
+        parent reports one finished event per outcome as the results land. The
+        counts stay honest — which is the point of a progress bar.
+        """
+        if sink is None:
+            return None
+
+        async def forward(payload: Any) -> None:
+            """Re-emit one shard result as a normal source-finished event."""
+            _kind, completed, _total, outcome = payload
+            await self._emit(
+                sink,
+                self._event(
+                    report,
+                    EVENT_SOURCE_FINISHED,
+                    f"checked {outcome.source_name}",
+                    completed=completed,
+                    total=total,
+                ),
+            )
+
+        return forward
+
     def _new_report(
         self, target: ScanTarget, sources: Sequence[Any], available_kinds: set[str] | None = None
     ) -> ScanReport:
