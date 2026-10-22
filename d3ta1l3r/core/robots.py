@@ -15,6 +15,7 @@ a lie about coverage.
 
 from __future__ import annotations
 
+import asyncio
 import time
 from dataclasses import dataclass, field
 from typing import Any
@@ -22,6 +23,7 @@ from urllib.parse import urlsplit
 from urllib.robotparser import RobotFileParser
 
 from ..errors import RobotsDeniedError, SourceError
+from .robots_cache import RobotsDiskCache
 
 __all__ = ["RobotsPolicy"]
 
@@ -53,7 +55,9 @@ class RobotsPolicy:
     cache_ttl: float | None = None
     crawl_delay_cap: float | None = None
     user_agent_token: str = _USER_AGENT_TOKEN
+    disk_cache: RobotsDiskCache | None = None
     _cache: dict[str, _Rules] = field(default_factory=dict)
+    _pending: dict[str, asyncio.Future] = field(default_factory=dict, repr=False)
 
     def __post_init__(self) -> None:
         config = getattr(self.fetcher, "config", None)
@@ -73,29 +77,87 @@ class RobotsPolicy:
             self.crawl_delay_cap = getattr(config, "crawl_delay_cap", 10.0)
 
     async def _rules_for(self, url: str) -> _Rules:
+        """Rules for the origin of ``url``, fetching at most once per origin.
+
+        Three layers, cheapest first: the in-memory cache for this run, the disk
+        cache from earlier runs, then a fetch that concurrent callers share
+        rather than repeat. Without the sharing, a host with four sources would
+        fetch the same robots.txt four times.
+        """
         parts = urlsplit(url)
         origin = f"{parts.scheme}://{parts.netloc}"
         cached = self._cache.get(origin)
         if cached and (time.monotonic() - cached.fetched_at) < self.cache_ttl:
             return cached
 
-        robots_url = f"{origin}/robots.txt"
-        rules = await self._load(robots_url)
+        if self.disk_cache is not None:
+            stored = self.disk_cache.get(origin)
+            if stored is not None:
+                rules = self._rules_from_stored(origin, stored)
+                self._cache[origin] = rules
+                return rules
+
+        pending = self._pending.get(origin)
+        if pending is not None:
+            return await asyncio.shield(pending)
+
+        loop = asyncio.get_running_loop()
+        future: asyncio.Future = loop.create_future()
+        self._pending[origin] = future
+        try:
+            robots_url = f"{origin}/robots.txt"
+            rules = await self._load(robots_url)
+        except BaseException as exc:
+            self._pending.pop(origin, None)
+            if not future.done():
+                future.set_exception(exc)
+            raise
+        self._pending.pop(origin, None)
         self._cache[origin] = rules
+        if not future.done():
+            future.set_result(rules)
         return rules
 
+    def _rules_from_stored(self, origin: str, stored: Any) -> _Rules:
+        """Rebuild rules from a disk entry; consult the fetcher for crawl delay."""
+        if stored.status in (401, 403):
+            return _Rules(None, time.monotonic(), "disallowed",
+                          note=f"robots.txt HTTP {stored.status} (cached)")
+        if stored.status in (404, 410):
+            return _Rules(None, time.monotonic(), "allowed",
+                          note="no robots.txt (cached)")
+        if stored.status >= 400:
+            outcome = "allowed" if self.fail_open else "disallowed"
+            return _Rules(None, time.monotonic(), outcome,
+                          note=f"robots.txt HTTP {stored.status} (cached)")
+        parser = RobotFileParser()
+        parser.set_url(stored.origin)
+        try:
+            parser.parse(stored.text.splitlines())
+        except Exception:
+            return _Rules(None, time.monotonic(), "allowed",
+                          note="cached robots.txt would not parse")
+        return _Rules(parser, time.monotonic(), "allowed",
+                      crawl_delay=self._crawl_delay_of(parser))
+
     async def _load(self, robots_url: str) -> _Rules:
+        origin = robots_url[: -len("/robots.txt")] if robots_url.endswith("/robots.txt") else robots_url
         try:
             # fetch_raw: anti-recursion — robots.txt itself is never robots-checked.
             response = await self.fetcher.fetch_raw(
                 robots_url, accept="text/plain", use_cache=True, check_robots=False
             )
         except Exception as exc:
+            # A fetch failure is not cached: it is usually transient, and
+            # remembering "disallowed" for a day over one timeout would quietly
+            # stop a site being scanned long after the network recovered.
             if self.fail_open:
                 return _Rules(None, time.monotonic(), "allowed", note=f"robots fetch failed: {exc}")
             return _Rules(None, time.monotonic(), "disallowed", note=f"robots fetch failed: {exc}")
 
         status = response.status
+        if self.disk_cache is not None:
+            self.disk_cache.put(origin, status, response.text if status < 400 else "")
         if status in (401, 403):
             return _Rules(None, time.monotonic(), "disallowed", note=f"robots.txt HTTP {status}")
         if status in (404, 410):
@@ -112,14 +174,18 @@ class RobotsPolicy:
         except Exception as exc:
             raise SourceError(f"could not parse robots.txt from {robots_url}: {exc}") from exc
 
-        delay = None
+        return _Rules(parser, time.monotonic(), "allowed",
+                      crawl_delay=self._crawl_delay_of(parser))
+
+    def _crawl_delay_of(self, parser: RobotFileParser) -> float | None:
+        """The ``Crawl-delay`` for this user agent, capped."""
         try:
             raw_delay = parser.crawl_delay(self.user_agent_token)
             if raw_delay is not None:
-                delay = min(float(raw_delay), self.crawl_delay_cap)
+                return min(float(raw_delay), self.crawl_delay_cap)
         except (TypeError, ValueError):  # pragma: no cover - malformed Crawl-delay
-            delay = None
-        return _Rules(parser, time.monotonic(), "allowed", crawl_delay=delay)
+            return None
+        return None
 
     async def check(self, url: str) -> None:
         """Raise :class:`RobotsDeniedError` when ``url`` may not be fetched."""

@@ -86,6 +86,28 @@ class RateLimitConfig:
             raise ConfigError("rate backoff values must be >= 0")
 
 
+def default_robots_cache_dir() -> Path | None:
+    """The platform cache directory, or ``None`` if it cannot be determined.
+
+    Uses the OS convention (``~/.cache`` on Linux, ``~/Library/Caches`` on
+    macOS, ``%LOCALAPPDATA%`` on Windows) rather than inventing a dotfile, so
+    clearing it works the way the user expects on their platform.
+    """
+    import os
+    import sys
+
+    try:
+        if sys.platform == "win32":
+            base = os.environ.get("LOCALAPPDATA") or os.path.expanduser("~")
+        elif sys.platform == "darwin":
+            base = os.path.expanduser("~/Library/Caches")
+        else:
+            base = os.environ.get("XDG_CACHE_HOME") or os.path.expanduser("~/.cache")
+        return Path(base) / "d3ta1l3r" / "robots"
+    except OSError:  # pragma: no cover - no usable home directory
+        return None
+
+
 @dataclass(slots=True)
 class ScanConfig:
     """Everything the engine needs to know about *how* to scan."""
@@ -176,6 +198,21 @@ class ScanConfig:
     cache_dir: Path | None = None
     cache_ttl: float = 86_400.0
     use_cache: bool = False
+
+    robots_cache_dir: Path | None = field(default_factory=default_robots_cache_dir)
+    """Where robots.txt is remembered between runs.
+
+    Separate from ``cache_dir`` on purpose. ``use_cache`` caches probe
+    *responses*, which changes what a scan reports; robots.txt is a policy file
+    that RFC 9309 says may be held for 24 hours, and it is about half the
+    requests in a broad scan. One is a correctness decision, the other is a
+    politeness-neutral optimisation, so they do not share a switch.
+
+    Set to ``None`` to disable.
+    """
+
+    robots_cache_enabled: bool = True
+    """Remember robots.txt between runs. ``False`` re-fetches it every scan."""
 
     # -- source selection ------------------------------------------------
     mode: int = DEFAULT_MODE
@@ -284,6 +321,10 @@ class ScanConfig:
         if (raw := os.environ.get("D3TA1L3R_CACHE_DIR")) is not None:
             values["cache_dir"] = Path(raw).expanduser()
             values["use_cache"] = True
+        if (raw := os.environ.get("D3TA1L3R_ROBOTS_CACHE")) is not None:
+            values["robots_cache_enabled"] = raw.strip().lower() not in {
+                "0", "false", "no", "off"
+            }
         if (raw := os.environ.get("D3TA1L3R_ROBOTS")) is not None:
             values["respect_robots"] = raw.strip().lower() not in {"0", "false", "no", "off"}
         if (raw := os.environ.get("D3TA1L3R_BROWSER")) is not None:
