@@ -124,6 +124,38 @@ class ScanConfig:
     strict_ssrf: bool = True
     """Reject URLs that resolve to private/loopback/link-local addresses."""
 
+    dns_ttl: float = 60.0
+    """Seconds a host's SSRF validation is reused before it is re-resolved.
+
+    With ``strict_ssrf`` on, every URL is checked against the host's A/AAAA
+    records. That resolution costs around 12 ms and used to run on *every
+    request*; at 944 sources it dominated the scan. Caching it per host is what
+    makes a broad scan finish in seconds rather than minutes.
+
+    The cost of caching is a DNS-rebinding window: a name that validated as
+    public is trusted for this long. Set it to ``0`` to resolve every request
+    exactly as before, which is the conservative choice and the one to use if
+    the hosts being scanned are not your own and not from the shipped
+    catalogue.
+    """
+
+    workers: int = 0
+    """Extra processes to scan with, besides the one running the event loop.
+
+    ``0`` (the default) keeps everything in a single process, which is right for
+    small scans: forking costs more than it saves below a few hundred sources.
+    Above that, response parsing is real CPU work and the GIL stops helping, so
+    sources are sharded across ``workers + 1`` processes.
+
+    Sharding is by *hostname*, so every request to a given host stays in one
+    process and the per-host rate limit is applied exactly as it would be
+    single-process. Politeness is per host, and splitting the work does not
+    multiply it.
+    """
+
+    parallel_min_sources: int = 200
+    """Do not bother forking below this many sources; the overhead is not worth it."""
+
     max_sites: int | None = None
     """Optional cap on how many username-probe sites run (useful for smoke tests)."""
 

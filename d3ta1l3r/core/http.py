@@ -30,10 +30,10 @@ from urllib.parse import urljoin, urlsplit
 import httpx
 
 from ..config import ScanConfig
-from ..errors import ForbiddenTargetError, HttpError, SourceError
+from ..errors import HttpError, SourceError
 from .cache import CacheEntry, ResponseCache
+from .hostguard import HostGuard
 from .ratelimit import HostRateLimiter, retry_delay
-from .security import assert_public_url
 
 __all__ = ["Fetcher", "HttpResponse"]
 
@@ -106,6 +106,12 @@ class Fetcher:
         self._transport = transport
         self._client: httpx.AsyncClient | None = None
         self._client_lock = asyncio.Lock()
+
+        #: SSRF validation for this scan, with its own per-host DNS cache.
+        self.host_guard = HostGuard(
+            resolve=config.strict_ssrf and not config.demo,
+            ttl=getattr(config, "dns_ttl", 60.0),
+        )
 
         # metrics
         self.hosts_contacted: set[str] = set()
@@ -251,19 +257,18 @@ class Fetcher:
 
     # -- internals -------------------------------------------------------
     async def _guard(self, url: str) -> str:
-        """SSRF-check a URL, off the event loop (DNS resolution can block).
+        """SSRF-check a URL through the scan's :class:`HostGuard`.
+
+        The cheap syntactic checks run inline on the event loop; only the DNS
+        question is deferred to a thread, and it is answered at most once per
+        host per TTL window. See :mod:`d3ta1l3r.core.hostguard` for why this
+        used to be the single largest cost in a scan.
 
         Demo mode keeps every syntactic check but skips DNS: it is defined as
         "never touch the network", and the synthetic demo hostnames famously do
         not resolve.
         """
-        resolve = self.config.strict_ssrf and not self.config.demo
-        try:
-            return await asyncio.to_thread(assert_public_url, url, resolve=resolve)
-        except ForbiddenTargetError:
-            raise
-        except OSError as exc:  # pragma: no cover - transport-level DNS weirdness
-            raise ForbiddenTargetError(f"could not validate host for {url}: {exc}") from exc
+        return await self.host_guard.check(url)
 
     async def _fetch_with_redirects(
         self,
