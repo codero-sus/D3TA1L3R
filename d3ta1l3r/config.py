@@ -44,8 +44,18 @@ class RateLimitConfig:
     per_host_burst: int = 4
     """Burst capacity of a host's token bucket."""
 
-    global_concurrency: int = 16
-    """Maximum in-flight sources across all hosts."""
+    global_concurrency: int = 64
+    """Maximum in-flight sources across all hosts.
+
+    Raised from 16 after measuring it as the binding constraint: with SSRF
+    validation cached, a 944-source scan went 6.6 s at 16, 2.3 s at 64 and
+    1.8 s at 256 against a fixed-latency network. The curve flattens hard past
+    64 — four times the concurrency for the last 22% — so 64 is where the
+    default sits.
+
+    This bounds how many *different hosts* are in flight at once. Politeness to
+    any single host is ``per_host_rps``, which is untouched by this setting.
+    """
 
     max_retries: int = 2
     """Retries after the first attempt (0 disables retrying)."""
@@ -140,17 +150,20 @@ class ScanConfig:
     """
 
     workers: int = 0
-    """Extra processes to scan with, besides the one running the event loop.
+    """Extra processes to scan with; ``0`` (the default) stays single-process.
 
-    ``0`` (the default) keeps everything in a single process, which is right for
-    small scans: forking costs more than it saves below a few hundred sources.
-    Above that, response parsing is real CPU work and the GIL stops helping, so
-    sources are sharded across ``workers + 1`` processes.
+    Opt-in on purpose. Sharding is not unconditionally faster: measured against
+    a 944-source demo scan, four processes came out at 0.80x — forking and
+    pickling several hundred source objects cost more than the per-source work
+    it parallelised. It is expected to pay once response bodies are large and
+    parsing is the bottleneck, but that has not been measured on real hardware,
+    so the default does not gamble with it.
 
-    Sharding is by *hostname*, so every request to a given host stays in one
-    process and the per-host rate limit is applied exactly as it would be
-    single-process. Politeness is per host, and splitting the work does not
-    multiply it.
+    When enabled, sharding is by *hostname*, so every request to a given host
+    stays in one process and the per-host rate limit is applied exactly as it
+    would be single-process. Politeness is per host; splitting the work does not
+    multiply it. Each shard gets ``global_concurrency / n_shards``, so total
+    in-flight requests stay where you put them.
     """
 
     parallel_min_sources: int = 200

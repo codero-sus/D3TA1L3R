@@ -62,14 +62,22 @@ class HostRateLimiter:
         self._lock = asyncio.Lock()
         self.waits = 0
 
-    async def _bucket(self, host: str) -> _Bucket:
-        async with self._lock:
-            bucket = self._buckets.get(host)
-            if bucket is None:
-                bucket = _Bucket(capacity=float(self.burst), refill_per_second=self.rps,
-                                 tokens=float(self.burst))
-                self._buckets[host] = bucket
-            return bucket
+    def _bucket(self, host: str) -> _Bucket:
+        """Return the bucket for ``host``, creating it if needed.
+
+        Deliberately synchronous and lock-free. This runs on the event loop
+        thread only, and there is no ``await`` between reading the dict and
+        writing it, so nothing can interleave — a plain dict lookup is already
+        atomic here. It used to take the instance-wide :class:`asyncio.Lock`,
+        which made every request in the scan queue behind one another for no
+        reason and quietly capped throughput.
+        """
+        bucket = self._buckets.get(host)
+        if bucket is None:
+            bucket = _Bucket(capacity=float(self.burst), refill_per_second=self.rps,
+                             tokens=float(self.burst))
+            self._buckets[host] = bucket
+        return bucket
 
     def set_min_interval(self, host: str, seconds: float) -> None:
         """Apply a robots.txt ``Crawl-delay`` as a floor between requests."""
@@ -79,7 +87,7 @@ class HostRateLimiter:
 
     async def acquire(self, host: str) -> float:
         """Wait until a request to ``host`` is allowed. Returns seconds waited."""
-        bucket = await self._bucket(host)
+        bucket = self._bucket(host)
         waited = 0.0
         while True:
             async with bucket.lock:

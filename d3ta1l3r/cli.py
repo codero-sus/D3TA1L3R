@@ -187,6 +187,11 @@ def build_parser() -> argparse.ArgumentParser:
     scan.add_argument("--jobs", "-j", type=int, default=None,
                       help="maximum concurrent sources (default 16)")
     scan.add_argument("--rps", type=float, default=None, help="requests per second per host")
+    scan.add_argument("--dns-ttl", type=float, default=None, dest="dns_ttl",
+                      help="seconds to reuse a host's SSRF validation (0 = re-resolve "
+                           "every request; slower, and the conservative choice)")
+    scan.add_argument("--workers", type=int, default=None,
+                      help="extra processes to scan with (default 0: single process)")
     scan.add_argument("--retries", type=int, default=None, help="retries per request (default 2)")
     scan.add_argument("--cache-dir", default=None,
                       help="reuse responses from this directory (repeat scans hit fewer sites)")
@@ -288,6 +293,8 @@ def build_parser() -> argparse.ArgumentParser:
     breach_common.add_argument("--timeout", type=float, default=None)
     breach_common.add_argument("--jobs", "-j", type=int, default=None)
     breach_common.add_argument("--rps", type=float, default=None)
+    breach_common.add_argument("--dns-ttl", type=float, default=None, dest="dns_ttl")
+    breach_common.add_argument("--workers", type=int, default=None)
 
     vault = sub.add_parser(
         "vault",
@@ -400,6 +407,8 @@ def build_parser() -> argparse.ArgumentParser:
     web.add_argument("--timeout", type=float, default=None)
     web.add_argument("--jobs", "-j", type=int, default=None)
     web.add_argument("--rps", type=float, default=None)
+    web.add_argument("--dns-ttl", type=float, default=None, dest="dns_ttl")
+    web.add_argument("--workers", type=int, default=None)
     web.add_argument("--no-robots", dest="respect_robots", action="store_false", default=True)
     web.add_argument("--model", metavar="PATH",
                      help="GGUF file for the local report chat (needs llama-cpp-python)")
@@ -2294,6 +2303,10 @@ def _config_from_args(
         base.per_host_rps = args.rps
         base.per_host_burst = max(1, int(max(args.rps, 1)))
         overrides["rate"] = base
+    if getattr(args, "dns_ttl", None) is not None:
+        overrides["dns_ttl"] = max(0.0, args.dns_ttl)
+    if getattr(args, "workers", None) is not None:
+        overrides["workers"] = max(0, args.workers)
     if getattr(args, "retries", None) is not None:
         from .config import RateLimitConfig
 

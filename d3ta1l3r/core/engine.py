@@ -54,6 +54,23 @@ ProgressCallback = Callable[[ScanEvent], Any]  # sync or async callable
 _SITES_FILE = Path(__file__).resolve().parent.parent / "data" / "sites.json"
 
 
+def demo_transport_for(target: ScanTarget) -> Any:
+    """Build the demo transport for ``target``.
+
+    Top-level so a worker process can build its own: a transport cannot be
+    pickled into a child, but the instructions for making one can. Demo mode
+    never touches the network, so it is safe to run sharded.
+    """
+    from .demo import DemoTransport
+
+    return DemoTransport(
+        username=target.username or "demo_user",
+        email=target.email or "demo.user@example.com",
+        name=target.name or "Demo User",
+        domain=(target.email or "example.com").partition("@")[2] or "example.com",
+    )
+
+
 class ScanEngine:
     """Runs one scan at a time; create a new engine for a new configuration."""
 
@@ -282,14 +299,8 @@ class ScanEngine:
     async def _open_fetcher(self, target: ScanTarget) -> tuple[Fetcher, ResponseCache | None]:
         transport = self._transport
         if self.config.demo and transport is None:
-            from .demo import DemoTransport
 
-            transport = DemoTransport(
-                username=target.username or "demo_user",
-                email=target.email or "demo.user@example.com",
-                name=target.name or "Demo User",
-                domain=(target.email or "example.com").partition("@")[2] or "example.com",
-            )
+            transport = demo_transport_for(target)
 
         cache: ResponseCache | None = self._cache
         if cache is None and self.config.use_cache and self.config.cache_dir:

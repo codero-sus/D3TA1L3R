@@ -1,14 +1,20 @@
-"""End-to-end benchmark: old settings vs accelerated, single vs multi-process.
+"""Measure the scan pipeline end to end, single process vs sharded.
 
-Must be run as a file (not ``python - <<EOF``) because the forkserver pool
-needs a real main module.
+Must be run as a file, not ``python - <<EOF``: the forkserver pool needs a real
+main module.
 
     .venv/bin/python benchmarks/parallel_check.py
+
+Demo mode is used because it never touches the network, which makes the numbers
+reproducible offline and independent of DNS. What is measured is the cost this
+tool actually controls: scheduling, request building, robots handling, and
+response parsing.
 """
 
 from __future__ import annotations
 
 import asyncio
+import statistics
 import sys
 import time
 from pathlib import Path
@@ -19,42 +25,40 @@ from d3ta1l3r.config import ScanConfig
 from d3ta1l3r.core.engine import ScanEngine
 from d3ta1l3r.models import ScanTarget
 
-
-async def timed(cfg: ScanConfig, runs: int = 2):
-    best, last = 1e9, None
-    for _ in range(runs):
-        start = time.perf_counter()
-        last = await ScanEngine(cfg).scan(ScanTarget.create(username="alice"))
-        best = min(best, time.perf_counter() - start)
-    return best, last
+ROUNDS = 3
 
 
-def mk(mode=15, *, conc=16, ttl=0.0, workers=0):
-    cfg = ScanConfig(mode=mode, use_cache=False, dns_ttl=ttl, workers=workers)
+def mk(mode=15, *, conc=16, workers=0, ttl=60.0, demo=True):
+    cfg = ScanConfig(mode=mode, use_cache=False, dns_ttl=ttl, workers=workers, demo=demo)
     cfg.rate.global_concurrency = conc
     return cfg
 
 
+async def timed(cfg: ScanConfig, runs: int = ROUNDS):
+    times, last = [], None
+    for _ in range(runs):
+        start = time.perf_counter()
+        last = await ScanEngine(cfg).scan(ScanTarget.create(username="alice"))
+        times.append(time.perf_counter() - start)
+    return statistics.median(times), last
+
+
 async def main() -> int:
     rows = [
-        ("old defaults   conc=16  ttl=0   1 proc", mk(conc=16, ttl=0.0, workers=0)),
-        ("dns cache only conc=16  ttl=60  1 proc", mk(conc=16, ttl=60.0, workers=0)),
-        ("+ concurrency  conc=128 ttl=60  1 proc", mk(conc=128, ttl=60.0, workers=0)),
-        ("+ concurrency  conc=256 ttl=60  1 proc", mk(conc=256, ttl=60.0, workers=0)),
-        ("+ 2 processes  conc=256 ttl=60  2 proc", mk(conc=256, ttl=60.0, workers=1)),
-        ("+ 4 processes  conc=256 ttl=60  4 proc", mk(conc=256, ttl=60.0, workers=3)),
+        ("1 process   conc=16", mk(conc=16, workers=0)),
+        ("1 process   conc=64", mk(conc=64, workers=0)),
+        ("1 process   conc=256", mk(conc=256, workers=0)),
+        ("2 processes conc=256", mk(conc=256, workers=1)),
+        ("4 processes conc=256", mk(conc=256, workers=3)),
     ]
 
     base = None
-    print(f"{'configuration':<42} {'seconds':>8} {'speedup':>9} {'sources':>8} {'reqs':>6}")
+    print(f"{'configuration':<24}{'seconds':>9}{'vs 1 proc':>11}{'sources':>9}", flush=True)
     for label, cfg in rows:
         sec, rep = await timed(cfg)
         if base is None:
             base = sec
-        print(
-            f"{label:<42} {sec:>8.2f} {base / sec:>8.2f}x "
-            f"{len(rep.outcomes):>8} {rep.stats.http_requests:>6}"
-        )
+        print(f"{label:<24}{sec:>9.2f}{base / sec:>10.2f}x{len(rep.outcomes):>9}", flush=True)
     return 0
 
 
