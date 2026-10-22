@@ -46,6 +46,7 @@ from .http import Fetcher
 from .parallel import recommended_workers, scan_sharded
 from .ratelimit import HostRateLimiter
 from .robots import RobotsPolicy
+from .robots_cache import RobotsDiskCache
 
 __all__ = ["ScanEngine", "run_scan"]
 
@@ -314,8 +315,29 @@ class ScanEngine:
         )
         await fetcher.start()
         if self.config.respect_robots:
-            fetcher.robots = RobotsPolicy(fetcher)
+            fetcher.robots = RobotsPolicy(
+                fetcher, disk_cache=self._robots_disk_cache()
+            )
         return fetcher, cache
+
+    def _robots_disk_cache(self) -> RobotsDiskCache | None:
+        """The cross-run robots.txt cache, when there is somewhere to put it.
+
+        robots.txt is about half the requests in a broad scan, and it changes
+        roughly never, so remembering it between runs is the single largest
+        remaining saving. It is skipped when caching is off entirely.
+        """
+        if not self.config.respect_robots:
+            return None
+        if not getattr(self.config, "robots_cache_enabled", True):
+            return None
+        directory = getattr(self.config, "robots_cache_dir", None)
+        if directory is None:
+            return None
+        try:
+            return RobotsDiskCache(Path(directory), ttl=self.config.robots_cache_ttl)
+        except OSError:  # pragma: no cover - a cache is never critical
+            return None
 
     async def _run_sources(
         self,
