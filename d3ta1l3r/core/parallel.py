@@ -44,7 +44,6 @@ process boundary.
 from __future__ import annotations
 
 import asyncio
-import os
 from collections.abc import Callable, Sequence
 from typing import Any
 from urllib.parse import urlsplit
@@ -99,19 +98,23 @@ def plan_shards(
 
 
 def recommended_workers(n_sources: int, config: ScanConfig, explicit: int | None = None) -> int:
-    """How many *extra* processes to use. ``0`` means stay in-process."""
+    """How many *extra* processes to use. ``0`` means stay in-process.
+
+    Off unless asked for. That is a measured decision, not caution: sharding a
+    944-source demo scan across four processes made it *slower* (0.80x), because
+    forking and pickling several hundred source objects costs more than the
+    per-source work it parallelises — at least when response bodies are small.
+
+    It is expected to pay when bodies are large and parsing is heavy, which is
+    the part that is genuinely CPU-bound. Until that is measured on hardware
+    with a real network, the default stays single-process so that nobody gets a
+    slower scan for free. Enable it with ``--workers N`` and measure.
+    """
     if explicit is not None:
         return max(0, explicit)
     if config.workers:
         return max(0, config.workers)
-    if n_sources < max(1, config.parallel_min_sources):
-        return 0
-    cpus = os.cpu_count() or 1
-    if cpus < 2:
-        return 0
-    # Leave one core for the process that owns the event loop, the dashboard
-    # and whatever else the machine is doing.
-    return min(cpus - 1, 8)
+    return 0
 
 
 async def scan_sharded(
@@ -231,9 +234,13 @@ def _scan_shard(payload: tuple) -> list[SourceOutcome]:
     Top-level and argument-only so it can be pickled by the pool.
     """
     config, sources, target = payload
-    from .engine import ScanEngine
+    from .engine import ScanEngine, demo_transport_for
 
-    engine = ScanEngine(config, sources=list(sources))
+    # A transport cannot cross the process boundary, so the child builds its
+    # own. Only demo mode can do this, which is why only demo mode is sharded
+    # when the caller injected a transport.
+    transport = demo_transport_for(target) if config.demo else None
+    engine = ScanEngine(config, sources=list(sources), transport=transport)
     report = asyncio.run(engine.scan(target))
     stats = {
         "http_requests": int(report.stats.http_requests or 0),

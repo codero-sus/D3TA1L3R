@@ -54,6 +54,7 @@ import asyncio
 import os
 import socket
 import time
+from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from urllib.parse import urlsplit
 
@@ -104,11 +105,14 @@ class HostGuard:
         ttl: float = DEFAULT_DNS_TTL,
         max_entries: int = _MAX_CACHE_ENTRIES,
         executor: ThreadPoolExecutor | None = None,
+        resolver: Callable[[str], bool] | None = None,
     ) -> None:
         self.resolve = resolve
         self.ttl = max(0.0, ttl)
         self.max_entries = max(64, max_entries)
         self._executor = executor or dns_executor()
+        #: Injectable so tests can prove the caching contract without a network.
+        self._resolver = resolver or _resolve_is_public
 
         self._cache: dict[str, float] = {}          # host -> expiry (monotonic)
         self._pending: dict[str, asyncio.Future[bool]] = {}
@@ -173,6 +177,9 @@ class HostGuard:
         """Resolve ``host`` at most once, even under a burst of concurrent requests."""
         loop = asyncio.get_running_loop()
 
+        pending: asyncio.Future[bool] | None = None
+        owner = False
+
         async with self._lock:
             now = time.monotonic()
             expiry = self._cache.get(host)
@@ -184,13 +191,20 @@ class HostGuard:
                 # Somebody else is already resolving this host; wait for them
                 # rather than starting a second identical lookup.
                 self.shared_lookups += 1
-                return await asyncio.shield(pending)
-            future: asyncio.Future[bool] = loop.create_future()
-            self._pending[host] = future
-            owner = True
+            else:
+                future: asyncio.Future[bool] = loop.create_future()
+                self._pending[host] = future
+                owner = True
+
+        if pending is not None:
+            # Awaited *outside* the lock. Holding the lock across this await
+            # would make one slow lookup hold up validation for every other
+            # host in the scan — the serialisation this module exists to remove.
+            return await asyncio.shield(pending)
 
         try:
-            result = await loop.run_in_executor(self._executor, _resolve_is_public, host)
+            self.dns_lookups += 1
+            result = await loop.run_in_executor(self._executor, self._resolver, host)
         except BaseException as exc:
             if owner:
                 self._pending.pop(host, None)
