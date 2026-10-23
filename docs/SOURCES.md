@@ -1,0 +1,317 @@
+# Sources: how checks are described, and how to add your own
+
+Two kinds of source ship with D3TA1L3R:
+
+| Kind | Where it lives | Confidence ceiling | Example |
+| --- | --- | --- | --- |
+| **API source** | `d3ta1l3r/sources/api/*.py` | `CONFIRMED` | GitHub `/users/{handle}` returns *the account record* |
+| **Probe source** | `d3ta1l3r/data/sites.json` + `sources/probe.py` | `HIGH` | Steam returns HTTP 200 and *"The specified profile could not be found."* only when the account is missing |
+
+A probe is a *heuristic*, so its confidence ceiling is `HIGH` (never
+`CONFIRMED`), and a status-code-only probe is capped at `MEDIUM` by a validation
+rule that will refuse to load a spec that claims more.
+
+## Detector types
+
+Every probe declares one of three detectors. Choosing the wrong one is the
+single most common way a signature-based scanner starts lying, so the three are
+kept deliberately narrow:
+
+### `marker` — a phrase that only appears on a real profile
+
+```json
+{
+  "id": "example_site", "name": "Example", "category": "social",
+  "url": "https://example.com/{username}",
+  "detector": "marker",
+  "found_marker": "data-profile-header",
+  "not_found_marker": "no such user",
+  "confidence_found": "high"
+}
+```
+
+Found only if `found_marker` appears. If `not_found_marker` also appears, the
+result is `not_found` (conservative ordering: an "absent" phrase anywhere wins).
+If neither appears → `error`, because a 200 with an unrecognised body means the
+layout changed, not that the account exists.
+
+### `absence` — HTTP 200 plus a known "no such user" phrase
+
+```json
+{
+  "detector": "absence",
+  "not_found_marker": "The specified profile could not be found.",
+  "confidence_found": "high"
+}
+```
+
+The site's error page is a 200 with an error phrase (Steam, Hacker News). The
+phrase present ⇒ `not_found`; phrase absent on a 200 ⇒ `found`. This is the most
+common real-world shape and the easiest to verify with `calibrate`.
+
+### `status` — 404 means absent, 200 means present
+
+```json
+{ "detector": "status", "confidence_found": "medium" }
+```
+
+Noisy by nature (SPA shells return 200 for missing profiles), so a spec using it
+cannot claim better than `medium`, and the evidence string says "verify by hand".
+Prefer `marker`/`absence`, or move the site to a real API.
+
+### Redirect and sign-in handling
+
+- `login_redirect_markers`: paths that mean **a sign-in wall** — reported as
+  `blocked` (unknown), never as absent. This is the difference between "you have
+  no Instagram account" and "Instagram will not talk to anonymous clients".
+- `absent_redirect_markers`: paths that legitimately mean the profile does not
+  exist (for example a redirect to `/404`).
+
+## Fields a spec accepts
+
+| Field | Required | Notes |
+| --- | --- | --- |
+| `id` | yes | lowercase, stable, unique; appears in reports and `--sources` |
+| `name` | yes | human label shown in reports |
+| `url` | yes | must contain exactly one `{username}` placeholder |
+| `category` | yes | used by `--categories` and the dashboard grouping |
+| `detector` | no (`marker`) | `marker` \| `absence` \| `status` |
+| `found_marker` / `not_found_marker` | per detector | case-insensitive substring match |
+| `absent_statuses` | no (`[404, 410]`) | statuses that mean "no such account" |
+| `confidence_found` / `confidence_absent` | no (`high`) | ceiling enforced by validation |
+| `login_redirect_markers`, `absent_redirect_markers` | no | see above |
+| `docs_url` | no | shown in coverage tables |
+| `notes` | required when `enabled_by_default: false` | *why* it is off |
+| `enabled_by_default` | no (`true`) | `false` for sites that fight automation |
+| `verified_on` | no | date you last confirmed the signature by hand |
+| `weight` | no (`200`) | lower runs first |
+| `tier` | no (`1`) | breadth tier `1..15`; a scan at mode `N` uses `tier <= N` |
+
+## Breadth modes
+
+Every source carries a **tier** from 1 to 15, and a scan at mode `N` probes
+every source whose tier is `<= N`. The mode is the dial for the one trade-off
+that cannot be engineered away: **coverage costs false positives**.
+
+```bash
+d3ta1l3r scan -u your_handle --mode 1      # narrow, quiet
+d3ta1l3r scan -u your_handle --mode 15     # everything, noisy
+d3ta1l3r modes                             # the table below
+```
+
+| Mode | Sources | What it adds |
+| --- | --- | --- |
+| 1 | 19 | narrowest — curated, high-signal sources only |
+| 2 | 38 | curated core — every hand-reviewed source |
+| 3 | 57 | curated core — every hand-reviewed source |
+| 4 | 131 | first step outside the curated core; unverified sources begin here |
+| 5 | 205 | broad — a large slice of the unverified catalogue |
+| 6 | 279 | broad — a large slice of the unverified catalogue |
+| 7 | 352 | broad — a large slice of the unverified catalogue |
+| 8 | 426 | broad — a large slice of the unverified catalogue |
+| 9 | 500 | very broad — noisy detectors and weak signatures included |
+| 10 | 574 | very broad — noisy detectors and weak signatures included |
+| 11 | 647 | very broad — noisy detectors and weak signatures included |
+| 12 | 721 | very broad — noisy detectors and weak signatures included |
+| 13 | 795 | nearly everything — status-only probes included |
+| 14 | 869 | nearly everything — status-only probes included |
+| 15 | 942 | everything — maximum reach, expect false positives |
+
+**966 sources, 68 enabled by default** at the default mode 3 — the other 885
+are catalogue entries that unlock as you raise the mode.
+
+*Counts are site probes; the 24 API sources run at every mode.*
+
+### What the tiers mean
+
+| Tiers | What lives there |
+| --- | --- |
+| **1-3** | The curated core: written and reviewed by hand for this project. |
+| **4-7** | Catalogue entries with a **found-marker**: the probe requires positive evidence, and says `error` rather than guessing when it cannot see it. |
+| **8-11** | Catalogue entries leaning on not-found phrases and plain status codes. |
+| **12-15** | Status-code-only probes, sites behind bot protection, and adult sites. The noisiest sources in the catalogue. |
+
+Within each band, sources are ordered by a documented **noise score** — detector
+reliability, how strong the confidence claim is, whether the site needs a
+non-profile probe URL, whether it sits behind bot protection, whether it is an
+adult site, whether its not-found phrase is too short to be distinctive. Raising
+the mode therefore adds the *least* noisy sources first: mode 4 is not a random
+slice of the catalogue, it is the catalogue's best-behaved entries.
+
+### The honesty caveat
+
+Everything from tier 4 up is **unverified**. Its URL templates and not-found
+phrases were bulk-converted from public, community-maintained datasets, not
+produced by this project probing the sites. They are believed correct, not known
+correct, and the confidence claims are set accordingly: a status-code-only probe
+claims `low` and nothing better.
+
+Run `d3ta1l3r calibrate --sites <id>` to measure any single entry.
+
+## Categories
+
+`--categories` filters on these, and the dashboard groups by them:
+
+| Category | Meaning |
+| --- | --- |
+| `developer` | code hosting, package registries, judging sites |
+| `social` | general-purpose social networks and profile pages |
+| `media` | video, streaming, image hosts |
+| `music` | music platforms, charts, listening history |
+| `gaming` | games, ladders, leaderboards |
+| `design` | portfolios, art, photography |
+| `writing` | blogs, newsletters, wikis, long-form |
+| `community` | forums, boards, discussion and ratings sites |
+| `identity` | real-world identifiers (ORCID, OpenStreetMap) |
+| `shopping` | marketplaces, storefronts, creator platforms |
+| `business` | company and professional profiles |
+| `finance` | trading, investing, crypto |
+| `learning` | courses, flashcards, study platforms |
+| `lifestyle` | fitness, food, travel, hobbies |
+| `books` | reading trackers and libraries |
+| `research` | academic and citation sources |
+| `filesharing` | torrent indexes and file hosts |
+| `adult` | adult platforms; age walls make these unreliable |
+| `general` | everything that fits nothing else |
+
+`adult` and `filesharing` entries are pushed to the **highest** tiers on
+purpose. An age wall or a CAPTCHA means the site may answer "not found" to
+every request, however good its signature looks on paper, so those sources are
+never offered as part of the low-noise end of the catalogue.
+
+Adding a site is a data change:
+
+```bash
+$EDITOR d3ta1l3r/data/sites.json
+d3ta1l3r sources --json | grep my_site        # confirm it loaded and validated
+d3ta1l3r calibrate --sites my_site            # prove it does not cry wolf
+d3ta1l3r scan -u your_handle --sources my_site
+```
+
+`calibrate` is not optional in practice. It probes handles that cannot exist and
+reports any site that claims to have found them; a signature that has never been
+calibrated is a hypothesis, and the report labels it as such.
+
+## Writing an API source
+
+API sources are plain classes. The contract has four rules:
+
+1. **One question, one identifier kind.** Declare `SourceKind` in the metadata;
+   if the operator did not supply that identifier, you will never be called.
+2. **Never invent identifiers.** Use only the value you are given.
+3. **Validate the payload shape** before reading fields
+   (`self.require_mapping(...)`).
+4. **Return a status; let exceptions fly.** They are contained and recorded.
+
+```python
+from d3ta1l3r.models import Confidence, ScanStatus, ScanTarget, SourceKind, SourceOutcome
+from d3ta1l3r.sources.base import SourceMeta
+from d3ta1l3r.sources.api.base import ApiSource
+
+
+class ExampleApiUser(ApiSource):
+    meta = SourceMeta(
+        id="example_api_user",
+        name="Example (API)",
+        kind=SourceKind.USERNAME,
+        category="developer",
+        description="Public profile record from api.example.com.",
+        docs_url="https://api.example.com/docs",
+        weight=45,
+    )
+
+    def query_url(self, identifier: str) -> str:
+        return f"https://api.example.com/users/{self.quote(identifier)}"
+
+    async def run(self, identifier: str, target: ScanTarget) -> SourceOutcome:
+        started = self.now()
+        result = await self.fetch_json(self.query_url(identifier))
+        if not result.ok:                     # 404 / 403 / 429 / 5xx → correct status
+            return self.outcome_for(result, identifier=identifier, started=started)
+
+        data = self.require_mapping(result, "Example user")
+        finding = self.finding(
+            identifier=identifier,
+            url=data.get("html_url", self.query_url(identifier)),
+            confidence=Confidence.CONFIRMED,   # the API returned the record itself
+            evidence=f"api.example.com returned the user record for '{data.get('username')}'",
+            display_name=data.get("name"),
+            bio=data.get("bio"),
+            account_created_at=data.get("created_at"),
+            extra={"followers": data.get("followers")},
+        )
+        return self.outcome_for(result, identifier=identifier, started=started, findings=[finding])
+```
+
+Register it in `d3ta1l3r/sources/api/__init__.py` (or pass `sources=[...]` to
+`ScanEngine` for a one-off), and add tests that pin both the happy path and the
+absence path — see `tests/test_api_sources.py` for the pattern, including the
+"garbage response must not raise" table-driven test every source is expected to
+survive.
+
+## What is deliberately not a source
+
+- **People-search brokers** (Whitepages-style aggregators), **breach corpora**,
+  **phone/address/relatives lookups** — out of scope; see `docs/SCOPE.md`.
+- **Anything requiring a key, OAuth, or a login.** If a site's public API needs
+  credentials, the source ships disabled with an explanation instead of asking
+  you to paste a token, because a self-audit should not need credentials for
+  services you are auditing.
+- **Sites that fight automation.** X/Twitter, LinkedIn, Facebook, Reddit,
+  TikTok, Threads and Quora all ship `enabled_by_default: false`. The honest
+  answer there is "check it yourself while signed in".
+
+## Coverage at a glance
+
+`d3ta1l3r sources` is always the source of truth. At the time of writing there
+are 81 sources, 68 enabled by default. Groups:
+
+- `developer` — GitHub, GitLab, Codeberg, Docker Hub, npm (handle + maintainer
+  email), PyPI, crates.io, RubyGems, Packagist, CodePen, JSFiddle, Kaggle,
+  LeetCode, Codewars, Exercism, Hugging Face, SourceForge, Bitbucket
+- `social` / `media` — Bluesky (handle + name search), Mastodon, Hacker News,
+  Lobsters, Wikipedia user pages, Instagram, Tumblr, Pinterest, Vimeo, YouTube,
+  Letterboxd, MyAnimeList, AniList, Trakt, SoundCloud, Mixcloud, Untappd
+- `gaming` — Chess.com, Lichess, Codeforces, speedrun.com, Steam, itch.io, osu!
+- `identity` — Gravatar (by email), RDAP (domain registration), Keybase
+- `research` — OpenAlex, arXiv, PubMed, ORCID, Wikipedia search
+- `design` — Behance, Dribbble, ArtStation, DeviantArt
+- `writing` — dev.to, Medium
+- `music` — Last.fm, SoundCloud, Mixcloud, Bandcamp
+- `community` — Hacker News, Lobsters, Wikipedia user pages
+- `learning` / `books` / `lifestyle` — Duolingo, Goodreads, Untappd, Patreon
+- `identity` — Gravatar, RDAP, Keybase, about.me
+
+## Breach sources
+
+These are not scan sources and do not appear in `d3ta1l3r sources`; they are what
+`d3ta1l3r breach` and the dashboard's watchlist talk to. Every one of them is
+bounded by what it is allowed to send — see `docs/SCOPE.md` §2a for the reasoning.
+
+| Source id | Needs | Sends | Answer |
+| --- | --- | --- | --- |
+| `pwned_passwords` | nothing | the first five hex characters of `SHA-1(password)` | `pwned` with a count, or `clean` |
+| `hibp_breaches` | your own HIBP API key | the email address and the key | `pwned` with breach names, or `clean` |
+| `local_corpus[FILE]` | a file you already have | nothing | match / no match, per entry |
+
+Rules that apply to a breach source (and are pinned in `tests/test_breach.py`):
+
+- **No acquisition.** A source never downloads, mirrors or bundles a corpus. The
+  local corpus is a file the operator supplies, and there is no code path that
+  fetches one.
+- **No secret retention.** A password is checked with the plaintext in memory for
+  the duration of the call. The vault keeps an outcome, and a SHA-1 verifier only
+  when the operator asked for one with `--store-hash`.
+- **No silent success.** A missing key, an HTTP 429, a malformed payload or a
+  missing corpus file produces `unknown` with a reason. `clean` requires an
+  answer from the service; a gap never becomes a pass.
+- **One identifier at a time.** Checks are per-entry and never enumerate. There
+  is no "search this corpus for everyone" mode, because that is the feature this
+  tool refuses to be.
+
+Build a local corpus from plaintext only if you own the data:
+
+```bash
+d3ta1l3r breach corpus-hash my-old-passwords.txt -o corpus/
+d3ta1l3r breach run --corpus corpus/my-old-passwords-sha1.txt
+```

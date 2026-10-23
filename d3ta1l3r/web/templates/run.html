@@ -1,0 +1,27 @@
+{% extends "base.html" %}
+{% block title %}Scan running — {{ title }}{% endblock %}
+
+{% block hero %}
+<section class="hero">
+  <h1>Scan in progress</h1>
+  <p>{{ run.targets | join(', ') }}{% if run.demo %} · <span class="badge low">demo mode</span>{% endif %}</p>
+</section>
+{% endblock %}
+
+{% block content %}
+<section class="panel" id="run-panel" data-run-id="{{ scan_id }}">
+  <div class="progressbar"><span id="progress-fill"></span></div>
+  <p class="runline"><span id="run-status">{{ run.status }}</span>
+    <span id="run-counter" class="muted"></span></p>
+  <p class="muted" id="run-message">Waiting for the first event…</p>
+  <pre class="log" id="run-log"></pre>
+  <p class="fineprint">
+    If this page stops updating, the stream was closed by a proxy — reload to see the result.
+    <a href="/api/scans/{{ scan_id }}/events">Raw event stream</a>.
+  </p>
+</section>
+{% endblock %}
+
+{% block scripts %}
+<script>D3TA1L3R.watchRun({{ scan_id | tojson }});</script>
+{% endblock %}
