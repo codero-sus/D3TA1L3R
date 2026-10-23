@@ -32,6 +32,7 @@ import httpx
 from ..config import ScanConfig
 from ..errors import HttpError, SourceError
 from .cache import CacheEntry, ResponseCache
+from .host_cache import HostValidationStore
 from .hostguard import HostGuard
 from .ratelimit import HostRateLimiter, retry_delay
 
@@ -85,6 +86,27 @@ class HttpResponse:
             raise SourceError(f"invalid JSON from {self.final_url}: {exc}") from exc
 
 
+def _host_store(config: Any) -> HostValidationStore | None:
+    """The cross-run store of hostnames known to be public, if enabled.
+
+    Same reasoning as the robots cache: the answer changes roughly never, and
+    re-resolving ~940 hostnames on every run is most of what a repeat scan
+    costs. Off in demo mode (which never resolves anything) and when the
+    operator turned it off.
+    """
+    if not getattr(config, "host_cache_enabled", True):
+        return None
+    if getattr(config, "demo", False):
+        return None
+    directory = getattr(config, "host_cache_path", None)
+    if directory is None:
+        return None
+    try:
+        return HostValidationStore(directory, ttl=getattr(config, "host_cache_ttl", 21_600.0))
+    except OSError:  # pragma: no cover - a cache is never critical
+        return None
+
+
 class Fetcher:
     """Async HTTP client with politeness, robots and safety built in."""
 
@@ -111,6 +133,7 @@ class Fetcher:
         self.host_guard = HostGuard(
             resolve=config.strict_ssrf and not config.demo,
             ttl=getattr(config, "dns_ttl", 60.0),
+            store=_host_store(config),
         )
 
         # metrics
@@ -155,7 +178,8 @@ class Fetcher:
             )
 
     async def close(self) -> None:
-        """Close the client and release its connections."""
+        """Close the client, persist the host cache, release its connections."""
+        self.host_guard.flush()
         client, self._client = self._client, None
         if client is not None:
             await client.aclose()

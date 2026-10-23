@@ -44,17 +44,26 @@ class RateLimitConfig:
     per_host_burst: int = 4
     """Burst capacity of a host's token bucket."""
 
-    global_concurrency: int = 64
+    global_concurrency: int = 128
     """Maximum in-flight sources across all hosts.
 
-    Raised from 16 after measuring it as the binding constraint: with SSRF
-    validation cached, a 944-source scan went 6.6 s at 16, 2.3 s at 64 and
-    1.8 s at 256 against a fixed-latency network. The curve flattens hard past
-    64 — four times the concurrency for the last 22% — so 64 is where the
-    default sits.
+    This is how many *different hosts* may be in flight at once. Politeness to
+    any single host is ``per_host_rps`` and is untouched by this setting: a
+    host still sees at most its two requests a second, whether 16 or 256 other
+    hosts are being asked at the same moment.
 
-    This bounds how many *different hosts* are in flight at once. Politeness to
-    any single host is ``per_host_rps``, which is untouched by this setting.
+    Raised from 16 to 128 after measuring it as the binding constraint. Once
+    the per-source CPU work was cut (cached validation, cached robots.txt),
+    concurrency became the whole story — a warm 944-source scan against a
+    fixed-latency network:
+
+        16 -> 6.6 s      128 -> 0.44 s
+        64 -> 0.81 s     256 -> 0.29 s
+
+    128 is where the curve starts flattening. Going to 256 roughly halves the
+    time again (``--jobs 256``) in exchange for twice the hosts in flight at
+    once, which is a footprint decision rather than a politeness one, so it is
+    left to the operator.
     """
 
     max_retries: int = 2
@@ -106,6 +115,18 @@ def default_robots_cache_dir() -> Path | None:
         return Path(base) / "d3ta1l3r" / "robots"
     except OSError:  # pragma: no cover - no usable home directory
         return None
+
+
+def default_host_cache_path() -> Path | None:
+    """Where to keep the cross-run host validation cache.
+
+    Sits beside the robots cache so one directory holds everything the tool
+    remembers between runs.
+    """
+    robots = default_robots_cache_dir()
+    if robots is None:
+        return None
+    return robots.parent / "hosts.json"
 
 
 @dataclass(slots=True)
@@ -214,6 +235,26 @@ class ScanConfig:
     robots_cache_enabled: bool = True
     """Remember robots.txt between runs. ``False`` re-fetches it every scan."""
 
+    host_cache_path: Path | None = field(default_factory=default_host_cache_path)
+    """Where hostnames known to be public are remembered between runs.
+
+    The most expensive question a scan asks is "does this name resolve to
+    public addresses", and for ~940 distinct hosts it is asked on every run.
+    The answer does not change from one day to the next, so it is stored.
+
+    Only *proven public* hosts are recorded. A host that failed to resolve is
+    always re-resolved, so a cache entry can never make the SSRF guard more
+    permissive than a fresh lookup would be. The syntactic checks — private
+    literals, blocked suffixes, embedded credentials — run on every URL
+    regardless.
+
+    Set to ``None``, or ``host_cache_enabled = False``, to disable.
+    """
+
+    host_cache_enabled: bool = True
+    host_cache_ttl: float = 21_600.0
+    """How long a "this host is public" result is reused. Six hours."""
+
     # -- source selection ------------------------------------------------
     mode: int = DEFAULT_MODE
     """Breadth mode, 1..15. A scan at mode ``N`` probes every source whose tier
@@ -321,6 +362,10 @@ class ScanConfig:
         if (raw := os.environ.get("D3TA1L3R_CACHE_DIR")) is not None:
             values["cache_dir"] = Path(raw).expanduser()
             values["use_cache"] = True
+        if (raw := os.environ.get("D3TA1L3R_HOST_CACHE")) is not None:
+            values["host_cache_enabled"] = raw.strip().lower() not in {
+                "0", "false", "no", "off"
+            }
         if (raw := os.environ.get("D3TA1L3R_ROBOTS_CACHE")) is not None:
             values["robots_cache_enabled"] = raw.strip().lower() not in {
                 "0", "false", "no", "off"

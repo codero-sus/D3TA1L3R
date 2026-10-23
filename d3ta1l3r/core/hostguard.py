@@ -56,6 +56,7 @@ import socket
 import time
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
+from typing import Any
 from urllib.parse import urlsplit
 
 from ..errors import ForbiddenTargetError
@@ -106,6 +107,7 @@ class HostGuard:
         max_entries: int = _MAX_CACHE_ENTRIES,
         executor: ThreadPoolExecutor | None = None,
         resolver: Callable[[str], bool] | None = None,
+        store: Any | None = None,
     ) -> None:
         self.resolve = resolve
         self.ttl = max(0.0, ttl)
@@ -113,6 +115,8 @@ class HostGuard:
         self._executor = executor or dns_executor()
         #: Injectable so tests can prove the caching contract without a network.
         self._resolver = resolver or _resolve_is_public
+        #: Optional cross-run store; only proven-public hosts are remembered.
+        self._store = store
 
         self._cache: dict[str, float] = {}          # host -> expiry (monotonic)
         self._pending: dict[str, asyncio.Future[bool]] = {}
@@ -122,6 +126,7 @@ class HostGuard:
         self.dns_lookups = 0
         self.cache_hits = 0
         self.shared_lookups = 0
+        self.cross_run_hits = 0
 
     # -- introspection ----------------------------------------------------
     @property
@@ -135,6 +140,7 @@ class HostGuard:
             "dns_lookups": self.dns_lookups,
             "cache_hits": self.cache_hits,
             "shared_lookups": self.shared_lookups,
+            "cross_run_hits": self.cross_run_hits,
             "hosts_cached": len(self._cache),
         }
 
@@ -164,6 +170,13 @@ class HostGuard:
         expiry = self._cache.get(host)
         if expiry is not None and now < expiry:
             self.cache_hits += 1
+            return candidate
+
+        # Known public from an earlier run and still inside its TTL: accept it
+        # without a lookup, and memoise it here so the store is read once.
+        if self._store is not None and self._store.is_known_public(host):
+            self.cross_run_hits += 1
+            self._remember(host)
             return candidate
 
         ok = await self._validate(host)
@@ -218,6 +231,8 @@ class HostGuard:
                 future.set_result(result)
             if result and self.ttl > 0:
                 self._remember(host)
+            if result and self._store is not None:
+                self._store.remember_public(host)
             return result
 
     def _remember(self, host: str) -> None:
@@ -242,6 +257,11 @@ class HostGuard:
         """Forget every cached host."""
         self._cache.clear()
         self._pending.clear()
+
+    def flush(self) -> None:
+        """Persist anything worth remembering for the next run."""
+        if self._store is not None:
+            self._store.flush()
 
 
 def _resolve_is_public(host: str) -> bool:
