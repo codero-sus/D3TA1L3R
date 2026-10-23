@@ -139,6 +139,55 @@ They contain personal data — the directory is gitignored on purpose, and
 -o reports/                                    # where to write reports
 ```
 
+## How fast, and why it got faster
+
+Measured with `benchmarks/throughput.py`, which pins request latency so the
+numbers are reproducible: 944 sources, ~1 870 requests, median of 5 runs.
+
+| | before | now |
+|---|---|---|
+| cold scan (nothing cached) | 6.87 s | 2.2 s |
+| warm scan (cache populated) | 6.87 s | **0.44 s** |
+| warm, `--jobs 256` | 6.87 s | **0.30 s** |
+
+The original bottleneck was not the network. It was `getaddrinfo`: every single
+request re-resolved its host's A/AAAA records through a thread pool, uncached.
+Measured per call:
+
+| | |
+|---|---|
+| the SSRF check itself | 5.2 µs |
+| the same check, via `asyncio.to_thread` | 83.3 µs |
+| `socket.getaddrinfo` | 12 620 µs |
+
+So each request paid 2 400× the cost of the check it was performing. A scan
+configured for 1024 concurrent requests behaved as though it were running about
+six at a time, because six threads were all that existed to do the work.
+
+Three caches now sit in front of that work, each with its own switch:
+
+- **`--dns-ttl SECONDS`** — reuse a host's SSRF validation (default 60 s; `0`
+  re-resolves every request and is the conservative choice). Only *proven
+  public* hosts are stored between runs; a host that failed to resolve is
+  always asked again, so a cache entry can never make the guard more permissive
+  than a fresh lookup.
+- **`--no-robots-cache`** — by default robots.txt is remembered for 24 hours,
+  which is the interval RFC 9309 recommends. It is about half the traffic in a
+  broad scan and changes roughly never.
+- **`--jobs N`** — concurrency, i.e. how many *different hosts* may be in
+  flight at once (default 128). Per-host politeness is `per_host_rps` and is
+  untouched: a host still sees at most its two requests a second whether 16 or
+  256 other hosts are being asked at the same moment.
+
+`--workers N` shards a scan across processes, partitioned by hostname so every
+request to a host stays in one process and the per-host rate limit is applied
+exactly as it would be single-process. **It is off by default because it does
+not currently pay**: sharding 944 sources across four processes measured
+0.95–1.02×. Forking and shipping results back cost about what the parallelised
+work saves, since per-source CPU time is now small. It should win on machines
+with many cores and large response bodies, but that has not been measured, so
+the default does not gamble on it.
+
 ## What gets checked
 
 ## Breadth modes: coverage costs false positives

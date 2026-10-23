@@ -245,3 +245,42 @@ class TestCachingDoesNotOpenAHole:
                 asyncio.run(guard.check(url))
         assert guard.cache_size == 0
         assert calls == [], "a syntactic refusal must never reach the resolver"
+
+
+class TestStartMethodChoice:
+    """fork is ~14x cheaper than forkserver, and only unsafe once threads exist."""
+
+    def test_a_process_with_no_dns_threads_may_fork(self) -> None:
+        import d3ta1l3r.core.hostguard as hg
+        import d3ta1l3r.core.parallel as par
+
+        original = hg._executor
+        try:
+            hg._executor = None
+            if _has_method("fork"):
+                assert par._start_context().get_start_method() == "fork"
+        finally:
+            hg._executor = original
+
+    def test_once_dns_threads_exist_it_will_not_fork(self) -> None:
+        """A live thread pool must not be inherited: fork would copy held locks."""
+        import d3ta1l3r.core.hostguard as hg
+        import d3ta1l3r.core.parallel as par
+
+        original = hg._executor
+        try:
+            hg._executor = object()  # any non-None value means "threads may exist"
+            assert par._start_context().get_start_method() != "fork"
+        finally:
+            hg._executor = original
+
+    def test_the_fallback_is_always_a_real_method(self) -> None:
+        import d3ta1l3r.core.parallel as par
+
+        assert par._start_context().get_start_method() in {"fork", "forkserver", "spawn"}
+
+
+def _has_method(name: str) -> bool:
+    import multiprocessing as mp
+
+    return name in mp.get_all_start_methods()
