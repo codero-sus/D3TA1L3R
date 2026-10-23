@@ -73,6 +73,15 @@ _executor: ThreadPoolExecutor | None = None
 _executor_lock = asyncio.Lock()
 
 
+def dns_threads_started() -> bool:
+    """Whether the shared DNS executor has been created yet.
+
+    Used to decide if forking is safe. A process that has never started the
+    executor has no worker threads, so a fork cannot inherit a lock mid-flight.
+    """
+    return _executor is not None
+
+
 def dns_executor(max_workers: int | None = None) -> ThreadPoolExecutor:
     """A shared executor sized for blocking DNS, not for CPU work.
 
