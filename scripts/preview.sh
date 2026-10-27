@@ -51,7 +51,8 @@ fi
 if [ ! -f "$dir/watchlist.vault" ]; then
     echo "seeding preview data in $dir ..."
     mkdir -p "$dir"
-    printf '%s\n' "$passphrase" > "$dir/pass"
+    # not a credential: a throwaway passphrase for a demo vault under /tmp
+    printf '%s\n' "$passphrase" > "$dir/pass"  # ggignore
     export D3TA1L3R_VAULT="$dir/watchlist.vault"
     export D3TA1L3R_VAULT_PASSPHRASE="$passphrase"
     "$cli" vault init --passphrase-file "$dir/pass" >/dev/null
