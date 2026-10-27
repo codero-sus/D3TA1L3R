@@ -1,0 +1,25 @@
+# GitGuardian configuration
+#
+# This repository holds no credentials, and should never: D3TA1L3R talks only to
+# public, key-free sources, and the one thing it protects — the user's own
+# watchlist — lives in a vault encrypted under a passphrase the tool does not
+# store.
+#
+# Two things in the tree nevertheless look like secrets to a scanner. Neither is
+# one, and both are excluded here with the reason recorded, because silently
+# suppressing a scanner is how a real secret eventually slips through.
+
+version: 2
+
+paths-ignore:
+  # Unit-test fixtures. Every "password" under tests/ is a literal used to
+  # exercise the vault in-process; none authenticates against anything, and none
+  # leaves the test run. They are spelled like real passwords on purpose, so the
+  # code paths that normalise, hash and redact them are exercised realistically.
+  - "tests/**"
+
+  # The local preview dashboard (scripts/preview.sh) seeds a throwaway vault
+  # under /tmp so the operator can see the UI with data in it. Its passphrase is
+  # printed to the terminal on start and guards nothing but that demo dataset on
+  # the operator's own machine.
+  - "scripts/preview.sh"

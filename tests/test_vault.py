@@ -109,7 +109,8 @@ class TestRoundTrip:
             VaultKind.PHONE: "+91 98100 00010",
             VaultKind.USERNAME: "Alice_dev",
             VaultKind.DOMAIN: "Example.com",
-            VaultKind.PASSWORD: "hunter2",
+            # not a credential: a literal to exercise the vault in-process
+            VaultKind.PASSWORD: "hunter2",  # ggignore
         }
         for kind, value in added.items():
             vault.add(kind, value, store_hash=True)
