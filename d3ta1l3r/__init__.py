@@ -20,6 +20,12 @@ Public API::
     from d3ta1l3r import ScanConfig, ScanTarget, ScanEngine, ScanReport
 
     report = await ScanEngine(ScanConfig()).scan(ScanTarget.create(username="me"))
+
+Media metadata, for the files you are about to publish::
+
+    from d3ta1l3r import analyze_path
+
+    print(analyze_path("photo.jpg").verdict)
 """
 
 from __future__ import annotations
@@ -33,6 +39,14 @@ from .errors import (
     RobotsDeniedError,
     SourceError,
     UsageError,
+)
+from .media import (
+    MediaFormat,
+    MediaReport,
+    Severity,
+    analyze_bytes,
+    analyze_path,
+    scrub_bytes,
 )
 from .models import (
     Confidence,
@@ -63,6 +77,8 @@ __all__ = [
     "Finding",
     "ForbiddenTargetError",
     "HttpError",
+    "MediaFormat",
+    "MediaReport",
     "RateLimitConfig",
     "RobotsDeniedError",
     "ScanConfig",
@@ -72,6 +88,7 @@ __all__ = [
     "ScanStats",
     "ScanStatus",
     "ScanTarget",
+    "Severity",
     "SourceError",
     "SourceKind",
     "SourceOutcome",
@@ -81,6 +98,9 @@ __all__ = [
     "__author_website__",
     "__repository__",
     "__version__",
+    "analyze_bytes",
+    "analyze_path",
+    "scrub_bytes",
 ]
 
 

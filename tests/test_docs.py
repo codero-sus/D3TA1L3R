@@ -47,6 +47,7 @@ class TestReadme:
             "web",
             "ask",
             "models",
+            "media",
             "update",
         }
         readme = _read("README.md")

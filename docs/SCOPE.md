@@ -383,6 +383,38 @@ So:
 If you want an automatic run to use remote sources anyway, that is your call to
 make deliberately and it is off by default.
 
+## 2f. Media metadata: local files in, nothing out
+
+`d3ta1l3r media` reads the metadata already inside a file you point it at — a
+photo you are about to post, a voice memo you are about to send — and reports
+what a stranger holding that file would learn. It exists because the scan
+answers "what do sites know?" and this answers "what does the file itself
+say?", which is the part you can still fix before publishing.
+
+The boundaries are deliberately narrow:
+
+- **No network.** Parsing is pure standard-library byte work. The OpenStreetMap
+  link in a GPS finding is *text composed from the coordinates*; it is never
+  opened, and no coordinate is ever sent anywhere for reverse geocoding. This is
+  the one place where the obvious convenience (turn coordinates into an address)
+  was refused on purpose — it would hand a third party the location the tool is
+  supposed to protect.
+- **No biometrics and no OCR.** No face recognition, no object detection, no
+  text extraction. Those need models and would turn a pre-publish check into
+  another system reading your photos.
+- **No upload, in either interface.** The CLI reads local paths; the dashboard
+  endpoint takes bytes in the request, parses them in memory, and returns a
+  verdict. Nothing is written to disk and nothing leaves the process.
+- **Scrubbing is verified, never assumed.** `media scrub` rewrites the file
+  without its metadata, then re-analyses its own output and reports the residual
+  score. Formats that would require a full encoder are refused with the reason,
+  because a file that merely *looks* clean is worse than an honest refusal.
+- **Bounded parsing.** Input size, IFD recursion, segment counts and
+  decompressed text are all capped; a cyclic or hostile file terminates instead
+  of hanging. A FIFO or device node is refused before any read.
+- **The original is never modified.** The scrubbed copy is a new file, and an
+  existing destination is not replaced without `--overwrite`.
+
 ## 3. Why the limits are where they are
 
 - **Public ≠ fair game.** Publicly reachable data about a person is still
@@ -424,6 +456,10 @@ make deliberately and it is off by default.
   from `argv`, where it would land in shell history and `ps`. A wrong passphrase
   or a modified byte fails closed with "nothing was decrypted". There is no
   recovery path and no escrow: lose the passphrase and the file is gone.
+- **Media analysis** (`d3ta1l3r media`, `/api/media`): the file is read into
+  memory, parsed and discarded; no copy is kept, no hash is stored and nothing
+  is written unless you ask for a scrub. The report names the file path and its
+  SHA-256, which are themselves personal data if you share the report.
 - **Breach reports** (`scans/breach/*.json`, `latest.json`): counts, statuses and
   masked values only — the same personal-data rules as scan reports apply.
 - **Report chat** (`d3ta1l3r ask`, and the dashboard panel): the question, the

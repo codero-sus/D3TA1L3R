@@ -6,6 +6,8 @@
     d3ta1l3r diff scans/old.json scans/new.json
     d3ta1l3r vault init                 # encrypted watchlist of your own identifiers
     d3ta1l3r breach run                 # re-check that watchlist against breach sources
+    d3ta1l3r media scan photo.jpg       # what a file you are about to post reveals
+    d3ta1l3r media scrub photo.jpg      # write a metadata-free copy, then verify it
     d3ta1l3r web --vault                # local dashboard, unlocked with the vault passphrase
 
 Design notes:
@@ -70,6 +72,19 @@ from .llm import (
 )
 from .llm import models as model_catalog
 from .llm.verify import render_verification_markdown
+from .media import (
+    DEFAULT_MAX_BYTES,
+    MediaFormat,
+    MediaReport,
+    Severity,
+    analyze_path,
+    iter_media_files,
+    scrub_path,
+    supported_formats,
+)
+from .media import (
+    render_markdown as render_media_markdown,
+)
 from .models import (
     EVENT_SCAN_FINISHED,
     EVENT_SOURCE_FINISHED,
@@ -429,6 +444,47 @@ def build_parser() -> argparse.ArgumentParser:
                      help="Cortex model id (default auto: ask the Cortex server)")
     web.add_argument("--cortex-host", default=CORTEX_DEFAULT_HOST, metavar="URL",
                      help="Cortex LLM Hoster; loopback by default, private LAN if you name it")
+    media = sub.add_parser(
+        "media",
+        help="read — and remove — the metadata in your own photos, audio and video",
+        description=(
+            "Analyse the metadata a file already carries (EXIF, GPS, PNG text, XMP, "
+            "ID3, Vorbis, MP4/QuickTime) and say what a stranger holding it would "
+            "learn. Nothing is uploaded and no network call is made."
+        ),
+    )
+    media_sub = media.add_subparsers(dest="media_command", required=True)
+
+    m_scan = media_sub.add_parser("scan", help="report the metadata in one or more files")
+    m_scan.add_argument("paths", nargs="+", help="files or directories to inspect")
+    m_scan.add_argument("--json", action="store_true", help="machine-readable output")
+    m_scan.add_argument("--markdown", metavar="PATH",
+                        help="also write a Markdown report for these files")
+    m_scan.add_argument("--no-recursive", dest="recursive", action="store_false",
+                        default=True, help="do not descend into directories")
+    m_scan.add_argument("--max-bytes", type=int, default=None, metavar="N",
+                        help="read at most N bytes of each file (default 128 MiB)")
+    m_scan.add_argument("--min-severity", default="low",
+                        choices=("info", "low", "medium", "high", "critical"),
+                        help="hide exposures below this severity (default low)")
+    m_scan.add_argument("--fail-on", default=None,
+                        choices=("low", "medium", "high", "critical"),
+                        help="exit 3 when any file has an exposure at this severity "
+                             "or above (a CI gate for publishing)")
+
+    m_scrub = media_sub.add_parser(
+        "scrub", help="write a metadata-free copy of a JPEG, PNG, WebP, FLAC or MP3",
+    )
+    m_scrub.add_argument("paths", nargs="+", help="files to scrub")
+    m_scrub.add_argument("--out", metavar="PATH",
+                         help="destination for a single input (default <name>.clean<ext>)")
+    m_scrub.add_argument("--overwrite", action="store_true",
+                         help="replace the destination if it already exists")
+    m_scrub.add_argument("--json", action="store_true", help="machine-readable output")
+
+    m_formats = media_sub.add_parser("formats", help="list recognised formats and extensions")
+    m_formats.add_argument("--json", action="store_true", help="machine-readable output")
+
     ask = sub.add_parser(
         "ask",
         help="ask a question about your stored scans with a model on this machine",
@@ -705,6 +761,228 @@ def cmd_update(args: argparse.Namespace) -> int:
 
 
 # ---------------------------------------------------------------------------
+# media
+# ---------------------------------------------------------------------------
+def cmd_media(args: argparse.Namespace) -> int:
+    """Dispatch the ``media`` sub-commands."""
+    if args.media_command == "scan":
+        return _media_scan(args)
+    if args.media_command == "scrub":
+        return _media_scrub(args)
+    if args.media_command == "formats":
+        return _media_formats(args)
+    raise UsageError(f"unknown media command: {args.media_command}")
+
+
+def _media_formats(args: argparse.Namespace) -> int:
+    """Print the formats the analyser recognises and which can be scrubbed."""
+    from .media import SCRUB_UNSUPPORTED
+
+    table = supported_formats()
+    scrubable = {
+        fmt.value for fmt in MediaFormat if fmt not in SCRUB_UNSUPPORTED
+    }
+    if args.json:
+        print(json.dumps(
+            {
+                "formats": [
+                    {
+                        "format": name,
+                        "extensions": extensions,
+                        "scrubbable": name in scrubable,
+                    }
+                    for name, extensions in table.items()
+                ]
+            },
+            indent=2,
+        ))
+        return EXIT_OK
+    print("format        extensions                 scrub")
+    print("-" * 56)
+    for name, extensions in table.items():
+        exts = ", ".join(extensions) if extensions else "-"
+        flag = "yes" if name in scrubable else "no"
+        print(f"{name:<13} {exts:<26} {flag}")
+    print()
+    print("Scrubbing is listed as 'no' where rewriting the container would need a")
+    print("full encoder; `d3ta1l3r media scrub` names the alternative instead of")
+    print("writing a file that only looks clean.")
+    return EXIT_OK
+
+
+def _media_scan(args: argparse.Namespace) -> int:
+    """Analyse every selected file and report what each one discloses."""
+    files = list(iter_media_files(args.paths, recursive=getattr(args, "recursive", True)))
+    if not files:
+        raise UsageError(
+            "no media files found in the given paths (recognised extensions: "
+            + ", ".join(sorted({ext for exts in supported_formats().values() for ext in exts}))
+            + ")"
+        )
+
+    max_bytes = args.max_bytes if getattr(args, "max_bytes", None) else DEFAULT_MAX_BYTES
+    threshold = Severity(args.min_severity)
+    fail_at = Severity(args.fail_on) if getattr(args, "fail_on", None) else None
+
+    reports: list[MediaReport] = []
+    failures: list[str] = []
+    for path in files:
+        try:
+            reports.append(analyze_path(path, max_bytes=max_bytes))
+        except OSError as exc:
+            failures.append(f"{path}: {exc}")
+
+    if args.json:
+        print(json.dumps(
+            {
+                "files": [report.to_dict() for report in reports],
+                "summary": _media_summary(reports, len(files)),
+                "unreadable": failures,
+            },
+            indent=2,
+            ensure_ascii=False,
+        ))
+    else:
+        for index, report in enumerate(reports):
+            if index:
+                print()
+            _print_media_report(report, threshold)
+        print()
+        summary = _media_summary(reports, len(files))
+        print(
+            f"{summary['files']} file(s): {summary['with_findings']} with findings, "
+            f"{summary['critical']} with critical exposure(s)."
+        )
+        if failures:
+            for failure in failures:
+                print(f"  could not read {failure}")
+
+    if getattr(args, "markdown", None):
+        destination = Path(args.markdown)
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        destination.write_text(
+            "\n\n---\n\n".join(render_media_markdown(report) for report in reports),
+            encoding="utf-8",
+        )
+        if not args.json:
+            print(f"  wrote {destination}")
+
+    if failures:
+        return EXIT_FAILURE
+    if fail_at is not None:
+        breached = [
+            report for report in reports
+            if report.worst is not None and report.worst.rank >= fail_at.rank
+        ]
+        if breached:
+            if not args.json:
+                print(
+                    f"  {len(breached)} file(s) carry {fail_at.value} or worse — "
+                    f"failing because --fail-on was requested."
+                )
+            return EXIT_NEW_FINDINGS
+    return EXIT_OK
+
+
+def _media_summary(reports: Sequence[MediaReport], requested: int) -> dict[str, Any]:
+    """Counts used by both the human summary line and ``--json``."""
+    return {
+        "requested": requested,
+        "files": len(reports),
+        "with_findings": sum(1 for report in reports if report.exposures),
+        "critical": sum(
+            1 for report in reports if report.worst is Severity.CRITICAL
+        ),
+        "high_or_worse": sum(
+            1 for report in reports
+            if report.worst is not None and report.worst.rank >= Severity.HIGH.rank
+        ),
+        "worst_score": max((report.score for report in reports), default=0),
+    }
+
+
+def _print_media_report(report: MediaReport, threshold: Severity) -> None:
+    """Print one report: the verdict first, then the evidence, then the fix."""
+    dimensions = (
+        f"{report.width} x {report.height}" if report.width and report.height else "size unknown"
+    )
+    print(f"{report.name}")
+    print(
+        f"  {report.format.label} · {report.size_bytes:,} bytes · {dimensions} · "
+        f"score {report.score}/100 — {report.verdict}"
+    )
+    shown = [item for item in report.exposures if item.severity.rank >= threshold.rank]
+    hidden = len(report.exposures) - len(shown)
+    for item in shown[:12]:
+        print(f"  {item.severity.value.upper():<9} {item.label:<24} {item.value}")
+        print(f"            ↳ {item.reveals}")
+    if len(shown) > 12:
+        print(f"  … {len(shown) - 12} more exposure(s)")
+    if hidden and threshold is not Severity.INFO:
+        print(f"  ({hidden} exposure(s) below the --min-severity threshold)")
+    if report.exposures:
+        print("  To remove:")
+        actions = list(dict.fromkeys(item.action for item in report.exposures))
+        for action in actions[:6]:
+            print(f"    - {action}")
+        if len(actions) > 6:
+            print(f"    … {len(actions) - 6} more; see the Markdown report for all of them")
+    for note in report.notes:
+        print(f"  note: {note}")
+
+
+def _media_scrub(args: argparse.Namespace) -> int:
+    """Write metadata-free copies, verifying that the metadata really is gone."""
+    if getattr(args, "out", None) and len(args.paths) > 1:
+        raise UsageError("--out takes a single input path")
+
+    results: list[dict[str, Any]] = []
+    problems: list[str] = []
+    for raw in args.paths:
+        path = Path(raw)
+        if not path.is_file():
+            problems.append(f"{path}: not a file")
+            continue
+        try:
+            result, destination = scrub_path(
+                path,
+                getattr(args, "out", None),
+                overwrite=getattr(args, "overwrite", False),
+            )
+        except D3ta1l3rError as exc:
+            problems.append(f"{path}: {exc}")
+            continue
+        payload = result.to_dict()
+        payload["source"] = str(path)
+        payload["destination"] = str(destination)
+        results.append(payload)
+        if result.residual_score > 0:
+            problems.append(
+                f"{destination}: residual metadata remains "
+                f"(score {result.residual_score}); inspect before publishing"
+            )
+
+    if args.json:
+        print(json.dumps({"scrubbed": results, "problems": problems}, indent=2))
+    else:
+        for item in results:
+            removed = ", ".join(item["removed"]) or "nothing"
+            print(
+                f"{item['source']} → {item['destination']}  "
+                f"({item['size_before']:,} → {item['size_after']:,} bytes, "
+                f"removed: {removed})"
+            )
+            print(
+                f"  residual: score {item['residual_score']}/100, "
+                f"{item['residual_exposures']} exposure(s)"
+            )
+        for problem in problems:
+            print(f"  {problem}", file=sys.stderr)
+
+    return EXIT_FAILURE if problems else EXIT_OK
+
+
+# ---------------------------------------------------------------------------
 # entry point
 # ---------------------------------------------------------------------------
 def main(argv: Sequence[str] | None = None) -> int:
@@ -725,6 +1003,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             return cmd_calibrate(args)
         if args.command == "diff":
             return cmd_diff(args)
+        if args.command == "media":
+            return cmd_media(args)
         if args.command == "web":
             return cmd_web(args)
         if args.command == "vault":
