@@ -611,3 +611,13 @@ code { transition: border-color var(--fast) var(--ease); }
   line-height: 1.5;
   margin: 0 0 0.4rem;
 }
+
+/* Media metadata severities (see docs/MEDIA.md for the model). */
+.sev { font-weight: 600; font-size: .72rem; letter-spacing: .04em; }
+.sev-critical { color: var(--bad); }
+.sev-high { color: #c2410c; }
+.sev-medium { color: #a16207; }
+.sev-low { color: var(--muted); }
+.sev-info { color: var(--muted); font-weight: 500; }
+#media-fields h4 { margin: .9rem 0 .25rem; }
+#media-fields ul { margin: 0 0 .5rem; padding-left: 1.1rem; }

@@ -7,6 +7,7 @@ Pages
 ``POST /logout``                   end the session
 ``GET  /scans/{id}``               a stored scan, or live progress for a run
 ``GET  /sources``                  coverage: what gets checked, and what does not
+``GET  /media``                    inspect a local photo/audio file's metadata
 
 API
 ---
@@ -23,6 +24,8 @@ API
 ``DELETE /api/vault/entries/{id}`` remove one (auth required)
 ``GET  /api/breach``              last breach-watch result (auth required)
 ``POST /api/breach/check``        run a breach check now (auth required)
+``POST /api/media``              analyse an uploaded photo/audio/video (base64)
+``GET  /api/media/formats``      formats recognised, and which can be scrubbed
 ``GET  /api/health``              liveness + effective settings
 
 Two security notes that the routes depend on:
@@ -94,6 +97,13 @@ from ..llm import (
     verify_findings,
 )
 from ..llm import models as model_catalog
+from ..media import (
+    SCRUB_UNSUPPORTED,
+    MediaFormat,
+    analyze_bytes,
+    scrub_bytes,
+    supported_formats,
+)
 from ..models import Confidence, ScanEvent, ScanReport, ScanTarget
 from ..modes import (
     LLM_RECOMMENDED_FROM,
@@ -283,6 +293,26 @@ class ModelPullRequest(BaseModel):
     model: str = Field(min_length=1, max_length=160)
     confirm: bool = False
     force: bool = False
+
+
+class MediaRequest(BaseModel):
+    """One uploaded file, base64-encoded, plus what the caller wants done with it.
+
+    Base64 in JSON keeps the endpoint dependency-free (no multipart parser) and
+    makes the request trivially reproducible from a test or a shell, which is
+    worth more here than raw-upload efficiency: a photo is small and the
+    dashboard is local.
+    """
+
+    name: str = Field(default="upload", max_length=200)
+    data_base64: str = Field(max_length=48_000_000)
+    scrub: bool = False
+    include_fields: bool = True
+
+
+#: Ceiling for an uploaded file.  The dashboard is a local tool; anything larger
+#: is a mistake or an attempt to make the process hold a huge buffer.
+MAX_MEDIA_UPLOAD = 32 * 1024 * 1024
 
 
 class VerifyRequest(BaseModel):
@@ -794,6 +824,14 @@ def create_app(settings: AppSettings | None = None) -> FastAPI:
             grouped=report.findings_by_category(),
         )
 
+    @app.get("/media", response_class=HTMLResponse)
+    async def media_page(request: Request) -> Any:
+        """Metadata inspector for local files: pick one, see what it reveals."""
+        redirect = _guard_page(request)
+        if redirect is not None:
+            return redirect
+        return _render(request, "media.html")
+
     @app.get("/sources", response_class=HTMLResponse)
     async def sources_page(request: Request) -> Any:
         """The source inventory."""
@@ -804,6 +842,69 @@ def create_app(settings: AppSettings | None = None) -> FastAPI:
         return _render(request, "sources.html", sources=engine.describe_sources())
 
     # -- api -------------------------------------------------------------
+    @app.post("/api/media")
+    async def api_media(
+        payload: MediaRequest, _: None = Depends(require_session)
+    ) -> dict[str, Any]:
+        """Analyse an uploaded file's metadata, and optionally return a scrubbed copy.
+
+        The bytes never leave this process and are not written to disk.  With
+        ``scrub`` the response carries a base64 copy of the cleaned file so the
+        caller can download it directly; when the format cannot be scrubbed the
+        response says why instead of failing the whole request.
+        """
+        import base64
+        import binascii
+
+        try:
+            raw = base64.b64decode(payload.data_base64, validate=True)
+        except (binascii.Error, ValueError) as exc:
+            raise HTTPException(
+                status_code=400, detail=f"data_base64 is not valid base64: {exc}"
+            ) from exc
+        if len(raw) > MAX_MEDIA_UPLOAD:
+            raise HTTPException(
+                status_code=413,
+                detail=f"file is {len(raw)} bytes; the limit is {MAX_MEDIA_UPLOAD}",
+            )
+
+        report = analyze_bytes(raw, payload.name)
+        body = report.to_dict()
+        if not payload.include_fields:
+            # The field list can be thousands of entries for a tag-heavy file;
+            # callers that only want the verdict can ask for it to be omitted.
+            body["fields"] = []
+        result: dict[str, Any] = {"report": body}
+        if payload.scrub:
+            try:
+                scrubbed = scrub_bytes(raw)
+            except D3ta1l3rError as exc:
+                result["scrub"] = {"error": str(exc), "supported": False}
+            else:
+                scrub_body = scrubbed.to_dict()
+                scrub_body["supported"] = True
+                scrub_body["data_base64"] = base64.b64encode(scrubbed.data).decode("ascii")
+                result["scrub"] = scrub_body
+        return result
+
+    @app.get("/api/media/formats")
+    async def api_media_formats(_: None = Depends(require_session)) -> dict[str, Any]:
+        """List recognised formats, their extensions, and scrub support."""
+        scrubable = {fmt.value for fmt in MediaFormat if fmt not in SCRUB_UNSUPPORTED}
+        table = supported_formats()
+        return {
+            "formats": [
+                {
+                    "format": name,
+                    "extensions": extensions,
+                    "kind": MediaFormat(name).kind,
+                    "scrubbable": name in scrubable,
+                }
+                for name, extensions in table.items()
+            ],
+            "max_upload_bytes": MAX_MEDIA_UPLOAD,
+        }
+
     @app.get("/api/health")
     async def health(request: Request) -> dict[str, Any]:
         """Liveness. Unauthenticated callers get the minimum useful payload."""

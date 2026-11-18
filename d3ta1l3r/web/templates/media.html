@@ -1,0 +1,74 @@
+{% extends "base.html" %}
+{% block title %}Media metadata — {{ title }}{% endblock %}
+
+{% block hero %}
+<section class="hero">
+  <h1>What your files say</h1>
+  <p>
+    A photo you are about to post usually carries the camera model, the exact
+    capture time, the editor that touched it, and — if location services were on —
+    a latitude and longitude good to a few metres. Pick a file to see what a
+    stranger holding it would learn, and what removes it.
+  </p>
+  <p class="muted">
+    Nothing is uploaded. The file goes to this dashboard on your machine, is
+    parsed in memory, and is never written to disk. No network request is made,
+    not even to turn the coordinates into an address.
+  </p>
+</section>
+{% endblock %}
+
+{% block content %}
+<section class="panel">
+  <h2>Check a file</h2>
+  <p class="hint">
+    JPEG, PNG, WebP, TIFF, HEIC, AVIF, GIF, BMP, SVG, MP3, FLAC, WAV, Ogg,
+    MP4, MOV and Matroska. Up to 32 MiB.
+  </p>
+  <p>
+    <input type="file" id="media-file"
+           accept="image/*,audio/*,video/*,.svg,.heic,.heif,.avif,.flac,.ogg,.opus,.mkv">
+  </p>
+  <p>
+    <label>
+      <input type="checkbox" id="media-scrub">
+      also produce a scrubbed copy
+      <span class="hint">(JPEG, PNG, WebP, FLAC and MP3; the result is re-checked)</span>
+    </label>
+  </p>
+  <p>
+    <button id="media-run" type="button">Analyse</button>
+    <span id="media-status" class="muted" role="status"></span>
+  </p>
+</section>
+
+<section class="panel" id="media-result" hidden>
+  <h2 id="media-verdict">Result</h2>
+  <p id="media-summary" class="muted"></p>
+
+  <table class="coverage" id="media-exposure-table" hidden>
+    <thead>
+      <tr><th>Severity</th><th>Field</th><th>Value</th><th>What it reveals</th></tr>
+    </thead>
+    <tbody id="media-exposures"></tbody>
+  </table>
+
+  <div id="media-actions" hidden>
+    <h3>How to remove it</h3>
+    <ul id="media-action-list"></ul>
+  </div>
+
+  <p>
+    <a id="media-download" class="button" download hidden>Download the cleaned file</a>
+  </p>
+
+  <details id="media-fields-box">
+    <summary>Every decoded field</summary>
+    <div id="media-fields"></div>
+  </details>
+
+  <div id="media-notes"></div>
+</section>
+
+<script src="/static/media.js"></script>
+{% endblock %}

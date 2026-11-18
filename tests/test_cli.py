@@ -56,7 +56,7 @@ class TestParser:
         subparsers = [action for action in parser._actions if action.dest == "command"]
         assert subparsers and set(subparsers[0].choices) == {
             "scan", "modes", "sources", "calibrate", "diff", "vault", "breach", "web",
-            "ask", "models", "update",
+            "ask", "models", "media", "update",
         }
 
 

@@ -190,6 +190,67 @@ the default does not gamble on it.
 
 ## What gets checked
 
+A scan looks for your own identifiers on **public pages and unauthenticated
+APIs**, grouped into nineteen categories:
+
+| Category | Sources | Category | Sources |
+|---|---:|---|---:|
+| general | 280 | community | 72 |
+| social | 168 | gaming | 70 |
+| developer | 105 | lifestyle | 45 |
+| design | 30 | shopping | 29 |
+| writing | 28 | music | 25 |
+| adult | 24 | media | 24 |
+| business | 20 | finance | 20 |
+| identity | 9 | learning | 9 |
+| research | 5 | filesharing | 2 |
+| books | 1 | | |
+
+Each hit carries the endpoint it came from, a confidence label, and the marker
+that matched — see [`docs/SOURCES.md`](docs/SOURCES.md) for the per-source list
+and the rules a spec has to obey.
+
+What is **never** checked is as important: no people-search brokers, no breach
+corpora, no phone/address lookups, no credential dumps, no endpoint behind a
+login or a paywall, and no technique that bypasses a control. Those are excluded
+by design and documented in [`docs/SCOPE.md`](docs/SCOPE.md).
+
+## Photos and files: what your own media says
+
+A scan tells you what sites know. `d3ta1l3r media` tells you what **the file**
+already says — before you post it.
+
+```bash
+d3ta1l3r media scan photo.jpg          # verdict, evidence, how to remove it
+d3ta1l3r media scan ~/Pictures --json  # walk a directory
+d3ta1l3r media scrub photo.jpg         # write photo.clean.jpg, then re-check it
+```
+
+```
+photo.jpg
+  JPEG · 2,204,331 bytes · 4032 x 3024 · score 100/100 — severe
+  CRITICAL  GPS position        28.614000, 77.209000
+            ↳ the exact place the photo was taken — typically within a few metres
+  CRITICAL  Body serial number  SN-0123456789
+            ↳ a permanent identifier that links every photo taken with that body
+  HIGH      Camera model        EOS R5
+  HIGH      Captured at         2026-03-04T11:22:30
+```
+
+It reads EXIF and GPS from JPEG/TIFF/PNG/WebP, text and XMP from PNG/WebP/SVG,
+ID3v2 from MP3, Vorbis comments from FLAC, RIFF INFO from WAV, and `udta` /
+`meta` from MP4/QuickTime/HEIC — entirely with the standard library, with **no
+network calls and no uploads**. Every field has a severity, an explanation of
+what a stranger learns, and the action that removes it.
+
+`media scrub` rewrites a JPEG, PNG, WebP, FLAC or MP3 without its metadata and
+then **re-analyses its own output**, so "clean" is a measured claim rather than
+an assumption. Formats that would need a full encoder are refused with the
+reason and an alternative. `--fail-on critical` exits `3`, which makes it usable
+as a publishing gate in CI.
+
+Full field catalogue, limits and API: [`docs/MEDIA.md`](docs/MEDIA.md).
+
 ## Breadth modes: coverage costs false positives
 
 `--mode N` (1-15) picks how much of the catalogue to probe. Every source carries
@@ -669,7 +730,9 @@ d3ta1l3r web --vault --port 7248    # unlock your watchlist at login (any port w
 
 The dashboard runs scans, streams live progress over Server-Sent Events (with
 polling fallback), renders the same findings and coverage tables, offers
-JSON/Markdown/standalone-HTML export, and can run the calibration check. With
+JSON/Markdown/standalone-HTML export, and can run the calibration check. It also
+exposes the media analyser (`POST /api/media`, `GET /api/media/formats`) for
+checking a photo's metadata before it is published. With
 `--vault` it also serves the watchlist, masks every value it renders, and runs
 the breach watch at each login. It stores everything in the same `scans/`
 directory as the CLI (breach reports under `scans/breach/`). All request URLs in
@@ -722,6 +785,7 @@ d3ta1l3r/
     probe.py          signature-driven public-page probes (specs live in data/sites.json)
     api/              typed clients for public JSON APIs
   data/sites.json     the signature database (data, not code)
+  media.py            EXIF/GPS/ID3/Vorbis/MP4 metadata: read it, explain it, scrub it
   vault.py            encrypted watchlist (scrypt + Fernet, atomic 0600 writes)
   breach.py           breach sources: k-anonymity range API, HIBP, local corpus
   llm/                the local report chat (GGUF, loopback Ollama, retrieval)
@@ -730,7 +794,7 @@ d3ta1l3r/
     cite.py           citation verification (invented ids are caught)
   web/                FastAPI dashboard + templates + assets
     auth.py           sessions, login throttle, CSRF/origin guard
-tests/                526 tests, offline via httpx.MockTransport
+tests/                1,400+ tests, offline via httpx.MockTransport
 ```
 
 Design rules enforced in code (and in the test suite):
@@ -756,7 +820,7 @@ Design rules enforced in code (and in the test suite):
 
 ```bash
 pip install -e '.[dev]'
-pytest                       # 526 tests, no network access required
+pytest                       # the full suite, no network access required
 pytest -m network            # opt-in: the handful of live checks
 ruff check d3ta1l3r tests
 ```
